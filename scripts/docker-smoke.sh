@@ -19,17 +19,23 @@ fail() {
   exit 1
 }
 
-# Wait up to ~5s for the server to come up.
-for _ in $(seq 1 50); do
-  curl -fsS "${base}/healthz" >/dev/null 2>&1 && break
-  sleep 0.1
+# Every request gets a hard timeout, so a server that accepts connections but never
+# answers fails fast instead of hanging CI.
+probe() { curl -fsS --max-time 1 "${base}$1" >/dev/null 2>&1; }
+
+# Wait for startup, with an overall deadline (SECONDS is bash's built-in timer).
+deadline=$((SECONDS + 10))
+until probe /healthz; do
+  ((SECONDS < deadline)) || fail "/healthz not healthy within 10s"
+  sleep 0.2
 done
+probe /readyz || fail "/readyz did not return 200"
 
-curl -fsS "${base}/healthz" >/dev/null || fail "/healthz did not return 200"
-curl -fsS "${base}/readyz" >/dev/null || fail "/readyz did not return 200"
-
+# USER can be "name", "uid", "name:group" or "uid:gid". Only the part before ':' decides
+# whether we run as root, so "root:nonroot" or "0:65532" must still fail.
 user="$(docker inspect -f '{{.Config.User}}' "$id")"
-[[ "$user" != "" && "$user" != "root" && "$user" != "0" ]] || fail "image runs as root (user=${user:-<unset>})"
+uid="${user%%:*}"
+[[ -n "$uid" && "$uid" != "root" && "$uid" != "0" ]] || fail "image runs as root (user=${user:-<unset>})"
 
 # docker stop sends SIGTERM, then SIGKILL after 10s. A graceful shutdown exits 0 well before that.
 docker stop "$id" >/dev/null
