@@ -25,4 +25,4 @@ flowchart LR
 
 ## Current
 
-Nothing runs yet. Phase 0 sets up the repo, conventions and CI.
+One process, `cmd/hello`, an HTTP server on `:8080` with `/`, `/healthz` and `/readyz`. It runs with `go run` for now and moves into Docker and kind in Phase 1.

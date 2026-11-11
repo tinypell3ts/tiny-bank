@@ -43,6 +43,7 @@ Current:
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh, hooks/pre-push
+├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
 └── docs/
     ├── architecture.md  # evolving architecture diagram
     ├── observability.md # logs, metrics, traces — what exists and why
@@ -50,7 +51,7 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): `cmd/`, `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`, `deploy/` (kind, Helm, Tilt).
+Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`, `deploy/` (kind, Helm, Tilt).
 
 ## Commands
 

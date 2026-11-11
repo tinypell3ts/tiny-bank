@@ -1,8 +1,8 @@
 # tiny-bank
 
-A small, Monzo-style core bank, built phase by phase to learn **Go microservices, Postgres, Kafka and Kubernetes**.
+A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 0, foundations. No runnable service yet.
+> **Status:** Phase 0, foundations. One demo service, `cmd/hello`.
 
 ## What it will be
 
@@ -25,6 +25,13 @@ make hooks   # once: blocks pushing badly named branches
 make check   # format check, vet, lint, tests: the same as CI
 ```
 
+Run the demo service:
+
+```bash
+go run ./cmd/hello                # PORT, LOG_LEVEL, SHUTDOWN_TIMEOUT are optional
+curl localhost:8080/healthz
+```
+
 Running the stack (kind, Helm, Tilt) arrives in Phase 1.
 
 ## Docs
@@ -32,5 +39,5 @@ Running the stack (kind, Helm, Tilt) arrives in Phase 1.
 - [Architecture](docs/architecture.md): how the pieces fit together
 - [Observability](docs/observability.md): logs, metrics and traces
 - [Decisions (ADRs)](docs/adr/): why we chose what we chose
-- [Phases](docs/phases/): what each phase built and what it teaches
+- [Phases](docs/phases/): what each phase built and why
 - [AGENTS.md](AGENTS.md): conventions and how we work (for humans and AI agents)
