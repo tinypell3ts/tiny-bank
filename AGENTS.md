@@ -43,7 +43,7 @@ Current:
 ├── Dockerfile           # one multi-stage, distroless image recipe for every service (PKG build arg)
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
-├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, hooks/pre-push
+├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
 ├── deploy/
 │   ├── kind/            # local kind cluster config
@@ -70,10 +70,12 @@ make docker-smoke SERVICE=x   # same for cmd/x
 make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
-make deploy                   # build, load and helm-install SERVICE (default hello) on the cluster
+make deploy                   # build SERVICE (default hello) and helm-install exactly that build on the cluster
 make undeploy                 # helm-uninstall SERVICE
 make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
 ```
+
+`make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
 Cluster commands use the kubectl context `kind-tiny-bank`. Always pass `--context kind-tiny-bank` in scripts and docs, so nothing ever runs against another cluster by accident.
 

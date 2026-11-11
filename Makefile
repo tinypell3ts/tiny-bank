@@ -6,7 +6,6 @@ IMAGE   ?= tiny-bank/$(SERVICE):dev
 CLUSTER ?= tiny-bank
 KUBECTX := kind-$(CLUSTER)
 CHART   := deploy/charts/service
-VALUES  := deploy/values/$(SERVICE).yaml
 
 .PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
 	cluster-up cluster-down image-load chart-check deploy undeploy
@@ -60,8 +59,8 @@ chart-check: ## Lint the chart and validate its output for every service (brew i
 		helm template $$(basename $$v .yaml) $(CHART) -f $$v | kubeconform -strict -summary || exit 1; \
 	done
 
-deploy: image-load ## Build, load and install or upgrade SERVICE on the kind cluster
-	helm upgrade --install $(SERVICE) $(CHART) -f $(VALUES) --kube-context $(KUBECTX) --wait --timeout 2m
+deploy: docker-build ## Build IMAGE and deploy exactly that build of SERVICE to the kind cluster
+	scripts/deploy.sh $(SERVICE) $(IMAGE) $(CLUSTER)
 
 undeploy: ## Remove SERVICE from the kind cluster
 	helm uninstall $(SERVICE) --kube-context $(KUBECTX)
