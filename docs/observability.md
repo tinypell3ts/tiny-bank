@@ -25,4 +25,12 @@ A bank must be able to answer **"what happened to this customer's money, and why
 
 ## Current
 
-Nothing emitted yet. Logging and health endpoints arrive in Phase 0 step 3.
+`cmd/hello` writes JSON logs to stdout. Every line has `time`, `level`, `msg` and `service`. Every request produces one `http request` line:
+
+```json
+{"level":"INFO","msg":"http request","service":"hello","request_id":"demo-1","method":"GET","path":"/readyz","status":200,"duration_ms":0.04}
+```
+
+- **Request ID:** taken from the caller's `X-Request-Id` if it is 1–64 characters of `[A-Za-z0-9_-]`, otherwise generated. It is echoed back in the response header.
+- **Log level:** `LOG_LEVEL` = `debug`, `info` (default), `warn` or `error`.
+- **Health:** `/healthz` returns 200 while the process is alive. `/readyz` returns 200 while serving and 503 once shutdown begins.

@@ -1,12 +1,12 @@
 # Phases
 
-tiny-bank is built in small phases, each one PR. Each phase gets its own page (`NN-title.md`) once it's built, covering what was built, the concepts it teaches and how to verify it.
+tiny-bank is built in small phases, each one PR. Each phase gets its own page (`NN-title.md`) once it's built, covering what was built, the key concepts behind it and how to verify it.
 
 Infrastructure comes first, so every service is born on Kubernetes.
 
 | # | Phase | Page |
 |---|-------|------|
-| 0 | Go foundations + CI | *in progress* |
+| 0 | Go foundations + CI | [00-foundations](00-foundations.md) |
 | 1 | Docker + kind + Helm + Tilt | |
 | 2 | Monitoring on cluster (Prometheus, Grafana) | |
 | 3 | `pkg/money` domain | |

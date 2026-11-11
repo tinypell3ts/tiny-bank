@@ -5,7 +5,7 @@
 
 ## Context
 
-tiny-bank is a learning project that will make many significant choices: transport, data ownership, messaging and runtime. Months later we'll want to know *why* a choice was made, not just what was chosen. Commit messages and PR descriptions get buried.
+tiny-bank will make many significant choices: transport, data ownership, messaging and runtime. Months later we'll want to know *why* a choice was made, not just what was chosen. Commit messages and PR descriptions get buried.
 
 ## Decision
 

@@ -39,7 +39,11 @@ Current:
 ├── AGENTS.md            # this file (CLAUDE.md points here)
 ├── README.md            # overview + quickstart
 ├── go.mod               # single Go module for the whole monorepo
-├── .github/             # PR template (CI workflow lands in Phase 0 step 2)
+├── Makefile             # fmt, lint, test, check — CI runs the same targets
+├── .golangci.yml        # linter config (golangci-lint v2)
+├── .github/             # PR template + CI workflow (workflows/ci.yml)
+├── scripts/             # check-branch-name.sh (+ _test.sh), hooks/pre-push
+├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
 └── docs/
     ├── architecture.md  # evolving architecture diagram
     ├── observability.md # logs, metrics, traces — what exists and why
@@ -47,16 +51,18 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): `cmd/`, `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`, `deploy/` (kind, Helm, Tilt).
+Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`, `deploy/` (kind, Helm, Tilt).
 
 ## Commands
 
 ```bash
-go build ./...   # compile everything
-go test ./...    # run unit tests
+make             # list targets
+make fmt         # format code
+make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts
+make hooks       # once per clone: enable the pre-push branch-name check
 ```
 
-A Makefile with `fmt`, `lint` and `test` targets arrives in Phase 0 step 2. Update this section when it does.
+Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs the same targets on every PR, plus a `branch-name` job.
 
 ## Conventions
 
