@@ -3,8 +3,9 @@
 
 SERVICE ?= hello
 IMAGE   ?= tiny-bank/$(SERVICE):dev
+CLUSTER ?= tiny-bank
 
-.PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke
+.PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke cluster-up cluster-down image-load
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-13s %s\n", $$1, $$2}'
@@ -37,3 +38,13 @@ docker-build: ## Build the image for SERVICE (default hello) as IMAGE
 
 docker-smoke: docker-build ## Run IMAGE, check /healthz, then check it stops cleanly on SIGTERM
 	scripts/docker-smoke.sh $(IMAGE)
+
+cluster-up: ## Create the local kind cluster (does nothing if it already exists)
+	@kind get clusters 2>/dev/null | grep -qx '$(CLUSTER)' || kind create cluster --name $(CLUSTER) --config deploy/kind/cluster.yaml --wait 2m
+	@kubectl cluster-info --context kind-$(CLUSTER)
+
+cluster-down: ## Delete the local kind cluster and everything in it
+	kind delete cluster --name $(CLUSTER)
+
+image-load: docker-build ## Build IMAGE and copy it into the kind cluster's node
+	kind load docker-image $(IMAGE) --name $(CLUSTER)

@@ -45,6 +45,7 @@ Current:
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
+├── deploy/kind/         # local kind cluster config
 └── docs/
     ├── architecture.md  # evolving architecture diagram
     ├── observability.md # logs, metrics, traces — what exists and why
@@ -63,7 +64,12 @@ make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover)
 make hooks       # once per clone: enable the pre-push branch-name check
 make docker-smoke             # build the hello image and smoke-test it
 make docker-smoke SERVICE=x   # same for cmd/x
+make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
+make image-load               # build IMAGE and load it into the cluster
+make cluster-down             # delete the cluster
 ```
+
+Cluster commands use the kubectl context `kind-tiny-bank`. Always pass `--context kind-tiny-bank` in scripts and docs, so nothing ever runs against another cluster by accident.
 
 Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs the same targets on every PR, plus a `branch-name` job.
 
