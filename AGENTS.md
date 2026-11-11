@@ -42,7 +42,7 @@ Current:
 ├── Makefile             # fmt, lint, test, check — CI runs the same targets
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
-├── scripts/             # check-branch-name.sh, hooks/pre-push
+├── scripts/             # check-branch-name.sh (+ _test.sh), hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
 └── docs/
     ├── architecture.md  # evolving architecture diagram
@@ -58,7 +58,7 @@ Planned (added only when a phase needs them): `pkg/` (shared libraries such as `
 ```bash
 make             # list targets
 make fmt         # format code
-make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover)
+make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts
 make hooks       # once per clone: enable the pre-push branch-name check
 ```
 

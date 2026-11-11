@@ -1,7 +1,7 @@
 # CI runs these same targets, so "works on my machine" == "works in CI".
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt fmt-check vet lint test check hooks
+.PHONY: help fmt fmt-check vet lint test test-scripts check hooks
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}'
@@ -21,7 +21,10 @@ lint: ## Run golangci-lint (brew install golangci-lint)
 test: ## Run unit tests with the race detector and coverage
 	go test -race -cover ./...
 
-check: fmt-check vet lint test ## Everything CI runs
+test-scripts: ## Test the shell scripts in scripts/
+	scripts/check-branch-name_test.sh
+
+check: fmt-check vet lint test test-scripts ## Everything CI runs
 
 hooks: ## Use the repo's git hooks (branch-name check on push)
 	git config core.hooksPath scripts/hooks

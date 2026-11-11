@@ -15,11 +15,13 @@ concurrency:
 
 jobs:
   branch-name:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Test branch-name script
+        run: make test-scripts
       - name: Check Conventional Branch name
+        if: github.event_name == 'pull_request'
         env:
           HEAD_REF: ${{ github.head_ref }} # via env, never inline, to avoid script injection
         run: scripts/check-branch-name.sh "$HEAD_REF"
@@ -38,6 +40,6 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5.0
+          version: v2.15.0 # keep in step with local `golangci-lint version`; must be built with Go >= go.mod's version
       - name: go test
         run: make test
