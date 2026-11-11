@@ -1,0 +1,11 @@
+# Local Kubernetes cluster for tiny-bank, run by kind ("Kubernetes in Docker"):
+# each Kubernetes node is a Docker container on your machine.
+#
+# Create and delete it with `make cluster-up` / `make cluster-down`. The cluster
+# name comes from CLUSTER in the Makefile, so it's not repeated here.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  # A single node is both control plane (API server, scheduler) and worker
+  # (runs our pods). Enough for local development, and the lightest option.
+  - role: control-plane

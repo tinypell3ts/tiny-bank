@@ -1,0 +1,37 @@
+# Defaults for every service. Override per service in deploy/values/<name>.yaml.
+
+# Service name. Used for resource names and labels. Required.
+name: ""
+
+image:
+  repository: "" # required, e.g. tiny-bank/hello
+  tag: dev
+  # IfNotPresent works with kind: images are loaded into the node, not pulled from a registry.
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+# Port the container listens on (passed to the app as PORT).
+port: 8080
+
+# Graceful shutdown. On pod termination Kubernetes:
+#   1. runs preStop (sleep), so load balancers stop routing here first,
+#   2. sends SIGTERM; the app drains for up to shutdownTimeoutSeconds,
+#   3. sends SIGKILL at terminationGracePeriodSeconds.
+# The chart sets terminationGracePeriodSeconds = preStop + shutdown + 5s buffer.
+preStopSleepSeconds: 5
+shutdownTimeoutSeconds: 10
+
+# Extra environment variables, rendered into the service's ConfigMap.
+# PORT and SHUTDOWN_TIMEOUT are set by the chart from the values above.
+config:
+  LOG_LEVEL: info
+
+resources:
+  requests:
+    cpu: 50m # 5% of one CPU: what the scheduler reserves
+    memory: 32Mi
+  limits:
+    # No CPU limit on purpose: CPU limits throttle the app even when the node is idle.
+    # A memory limit is a hard ceiling: exceed it and the container is killed (OOMKilled).
+    memory: 64Mi

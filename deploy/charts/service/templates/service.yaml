@@ -1,0 +1,17 @@
+# A stable name and virtual IP in front of the pods. Other services call
+# http://<name>/ instead of tracking individual pod IPs, which change.
+# Only pods passing their readiness probe receive traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

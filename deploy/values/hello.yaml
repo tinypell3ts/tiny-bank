@@ -1,0 +1,4 @@
+# hello's settings for the generic chart (deploy/charts/service).
+name: hello
+image:
+  repository: tiny-bank/hello

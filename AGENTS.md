@@ -24,6 +24,7 @@ Format `<type>/<description>`, trunk is `main`.
 - Optional ticket ref: `feature/issue-12-ledger-postings`.
 - Examples: `feature/phase-0-foundations`, `chore/bump-go`.
 - **Never use vendor or agent prefixes** such as `claude/`, `copilot/` or `codex/`.
+- **This is deliberately stricter than the published spec** ([conventionalbranch.org](https://conventionalbranch.org)), which allows dots in any branch, AI-agent types like `claude/`, and any description after `release/`. We allow dots only in versions, ban agent types, and require `release/` to be a version. The rule lives in `scripts/check-branch-name.sh`, which `scripts/check-branch-name_test.sh` tests.
 
 ## Commits — Conventional Commits
 
@@ -39,11 +40,17 @@ Current:
 ├── AGENTS.md            # this file (CLAUDE.md points here)
 ├── README.md            # overview + quickstart
 ├── go.mod               # single Go module for the whole monorepo
-├── Makefile             # fmt, lint, test, check — CI runs the same targets
+├── Makefile             # fmt, lint, test, check, docker-* — CI runs the same targets
+├── Dockerfile           # one multi-stage, distroless image recipe for every service (PKG build arg)
+├── Tiltfile             # dev loop: build + deploy + port-forward every service, redeploy on save
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
-├── scripts/             # check-branch-name.sh (+ _test.sh), hooks/pre-push
+├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
+├── deploy/
+│   ├── kind/            # local kind cluster config
+│   ├── charts/service/  # ONE generic Helm chart used by every service
+│   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
     ├── architecture.md  # evolving architecture diagram
     ├── observability.md # logs, metrics, traces — what exists and why
@@ -51,7 +58,9 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`, `deploy/` (kind, Helm, Tilt).
+Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`.
+
+Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
 ## Commands
 
@@ -60,7 +69,23 @@ make             # list targets
 make fmt         # format code
 make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts
 make hooks       # once per clone: enable the pre-push branch-name check
+make docker-smoke             # build the hello image and smoke-test it
+make docker-smoke SERVICE=x   # same for cmd/x
+make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
+make image-load               # build IMAGE and load it into the cluster
+make cluster-down             # delete the cluster
+make deploy                   # build SERVICE (default hello) and helm-install exactly that build on the cluster
+make undeploy                 # helm-uninstall SERVICE
+make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
+make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
+make dev-down                 # remove what Tilt deployed (cluster stays up)
 ```
+
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port.
+
+`make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
+
+Cluster commands use the kubectl context `kind-tiny-bank`. Always pass `--context kind-tiny-bank` in scripts and docs, so nothing ever runs against another cluster by accident.
 
 Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs the same targets on every PR, plus a `branch-name` job.
 
@@ -73,6 +98,8 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 - **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients.
 - **Tests:** table-driven where it fits. Standard library `testing` first.
 - **One Go module** for the monorepo, so every service always builds against the latest shared code.
+- **Bump Go in three places together:** `go.mod`, `GO_VERSION` in the `Dockerfile`, and the golangci-lint version in CI, which must be built with a Go version at least as new.
+- **Images** are distroless and run as non-root. Never add a shell or package manager to the runtime stage.
 
 ## Engineering principles
 

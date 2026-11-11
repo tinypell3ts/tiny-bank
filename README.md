@@ -2,7 +2,7 @@
 
 A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 0, foundations. One demo service, `cmd/hello`.
+> **Status:** Phase 1, done. One demo service, `cmd/hello`, running in Docker on a local Kubernetes cluster with a one-command dev loop.
 
 ## What it will be
 
@@ -32,7 +32,29 @@ go run ./cmd/hello                # PORT, LOG_LEVEL, SHUTDOWN_TIMEOUT are option
 curl localhost:8080/healthz
 ```
 
-Running the stack (kind, Helm, Tilt) arrives in Phase 1.
+Or run it as a container:
+
+```bash
+make docker-build
+docker run --rm -p 8080:8080 tiny-bank/hello:dev
+```
+
+Or run it on a local Kubernetes cluster, the everyday way (needs `brew install kind kubectl helm tilt`):
+
+```bash
+make dev            # creates the cluster if needed, then starts Tilt
+curl localhost:8080/healthz
+```
+
+Tilt builds the image, deploys it with Helm and forwards `localhost:8080`. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed, and `make cluster-down` to delete the cluster.
+
+Without Tilt, for a one-off deploy:
+
+```bash
+make cluster-up
+make deploy
+kubectl --context kind-tiny-bank port-forward svc/hello 8080:80
+```
 
 ## Docs
 

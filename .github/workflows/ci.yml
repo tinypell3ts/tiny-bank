@@ -43,3 +43,25 @@ jobs:
           version: v2.15.0 # keep in step with local `golangci-lint version`; must be built with Go >= go.mod's version
       - name: go test
         run: make test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image and smoke-test it
+        run: make docker-smoke
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.1 # keep in step with local `helm version`
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install kubeconform
+        run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+      - name: Lint chart and validate manifests
+        run: make chart-check
