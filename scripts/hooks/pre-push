@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # Local git hook: blocks pushing a branch whose name breaks Conventional Branch.
 # Install with: make hooks
+#
+# git passes one line per ref being pushed on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# We check the remote branch name, not the checked-out branch, because
+# `git push origin main` can run while you're on another branch.
 set -euo pipefail
 
-branch="$(git rev-parse --abbrev-ref HEAD)"
+check="$(git rev-parse --show-toplevel)/scripts/check-branch-name.sh"
 
-# The trunk is allowed as-is.
-if [[ "$branch" == "main" ]]; then
-  exit 0
-fi
-
-exec "$(git rev-parse --show-toplevel)/scripts/check-branch-name.sh" "$branch"
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main) ;;                                   # trunk is allowed as-is
+    refs/heads/*) "$check" "${remote_ref#refs/heads/}" ;; # validate branch name
+    *) ;;                                                 # tags etc. are not branches
+  esac
+done
