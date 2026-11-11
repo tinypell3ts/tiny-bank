@@ -8,7 +8,7 @@ KUBECTX := kind-$(CLUSTER)
 CHART   := deploy/charts/service
 
 .PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy
+	cluster-up cluster-down image-load chart-check deploy undeploy dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-13s %s\n", $$1, $$2}'
@@ -64,3 +64,9 @@ deploy: docker-build ## Build IMAGE and deploy exactly that build of SERVICE to 
 
 undeploy: ## Remove SERVICE from the kind cluster
 	helm uninstall $(SERVICE) --kube-context $(KUBECTX)
+
+dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
+	tilt up --context $(KUBECTX)
+
+dev-down: ## Remove everything Tilt deployed (the cluster stays up)
+	tilt down --context $(KUBECTX)

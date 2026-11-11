@@ -41,6 +41,7 @@ Current:
 ├── go.mod               # single Go module for the whole monorepo
 ├── Makefile             # fmt, lint, test, check, docker-* — CI runs the same targets
 ├── Dockerfile           # one multi-stage, distroless image recipe for every service (PKG build arg)
+├── Tiltfile             # dev loop: build + deploy + port-forward every service, redeploy on save
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
@@ -73,7 +74,11 @@ make cluster-down             # delete the cluster
 make deploy                   # build SERVICE (default hello) and helm-install exactly that build on the cluster
 make undeploy                 # helm-uninstall SERVICE
 make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
+make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
+make dev-down                 # remove what Tilt deployed (cluster stays up)
 ```
+
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 

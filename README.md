@@ -39,15 +39,22 @@ make docker-build
 docker run --rm -p 8080:8080 tiny-bank/hello:dev
 ```
 
-Or run it on a local Kubernetes cluster (needs `brew install kind kubectl helm`):
+Or run it on a local Kubernetes cluster, the everyday way (needs `brew install kind kubectl helm tilt`):
 
 ```bash
-make cluster-up     # create the "tiny-bank" kind cluster
-make deploy         # build the image, load it, and install it with Helm
-kubectl --context kind-tiny-bank port-forward svc/hello 8080:80
+make dev            # creates the cluster if needed, then starts Tilt
+curl localhost:8080/healthz
 ```
 
-A one-command dev loop with Tilt is coming later in Phase 1.
+Tilt builds the image, deploys it with Helm and forwards `localhost:8080`. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed, and `make cluster-down` to delete the cluster.
+
+Without Tilt, for a one-off deploy:
+
+```bash
+make cluster-up
+make deploy
+kubectl --context kind-tiny-bank port-forward svc/hello 8080:80
+```
 
 ## Docs
 
