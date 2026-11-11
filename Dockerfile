@@ -30,9 +30,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # --- runtime stage: just the binary ---
 # distroless/static has no shell, no package manager and no libc: very little to attack.
-# The :nonroot tag runs as UID 65532 instead of root.
+# The :nonroot tag provides user "nonroot", UID 65532.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
-USER nonroot:nonroot
+# Numeric, not "nonroot": Kubernetes' runAsNonRoot can only verify a numeric UID.
+USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/app"]

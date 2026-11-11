@@ -1,0 +1,5 @@
+apiVersion: v2
+name: service
+description: Generic chart for any tiny-bank Go service. Each service supplies its own values file in deploy/values/.
+type: application
+version: 0.1.0

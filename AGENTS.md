@@ -45,7 +45,10 @@ Current:
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
-├── deploy/kind/         # local kind cluster config
+├── deploy/
+│   ├── kind/            # local kind cluster config
+│   ├── charts/service/  # ONE generic Helm chart used by every service
+│   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
     ├── architecture.md  # evolving architecture diagram
     ├── observability.md # logs, metrics, traces — what exists and why
@@ -67,6 +70,9 @@ make docker-smoke SERVICE=x   # same for cmd/x
 make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
+make deploy                   # build, load and helm-install SERVICE (default hello) on the cluster
+make undeploy                 # helm-uninstall SERVICE
+make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
 ```
 
 Cluster commands use the kubectl context `kind-tiny-bank`. Always pass `--context kind-tiny-bank` in scripts and docs, so nothing ever runs against another cluster by accident.

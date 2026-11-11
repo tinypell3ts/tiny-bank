@@ -39,16 +39,15 @@ make docker-build
 docker run --rm -p 8080:8080 tiny-bank/hello:dev
 ```
 
-Or run it on a local Kubernetes cluster (needs `brew install kind kubectl`):
+Or run it on a local Kubernetes cluster (needs `brew install kind kubectl helm`):
 
 ```bash
 make cluster-up     # create the "tiny-bank" kind cluster
-make image-load     # build the image and load it into the cluster
-kubectl --context kind-tiny-bank run hello --image=tiny-bank/hello:dev --image-pull-policy=Never
-kubectl --context kind-tiny-bank port-forward pod/hello 8080:8080
+make deploy         # build the image, load it, and install it with Helm
+kubectl --context kind-tiny-bank port-forward svc/hello 8080:80
 ```
 
-Proper deployment with Helm and a one-command dev loop with Tilt are coming later in Phase 1.
+A one-command dev loop with Tilt is coming later in Phase 1.
 
 ## Docs
 
