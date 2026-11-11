@@ -2,7 +2,7 @@
 
 A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 0, foundations. One demo service, `cmd/hello`.
+> **Status:** Phase 1, done. One demo service, `cmd/hello`, running in Docker on a local Kubernetes cluster with a one-command dev loop.
 
 ## What it will be
 

@@ -25,4 +25,22 @@ flowchart LR
 
 ## Current
 
-One process, `cmd/hello`, an HTTP server on `:8080` with `/`, `/healthz` and `/readyz`. It runs with `go run` for now and moves into Docker and kind in Phase 1.
+One demo service, `hello`, running on a local kind cluster:
+
+```mermaid
+flowchart LR
+    dev([Developer]) -->|make dev| tilt[Tilt]
+    tilt -->|build| img[hello image<br/>distroless, UID 65532]
+    tilt -->|helm chart: deploy/charts/service| k8s
+    subgraph k8s [kind cluster: kind-tiny-bank]
+        svc[Service hello] --> pod[Pod hello<br/>probes /healthz, /readyz]
+    end
+    dev -->|localhost:8080 port-forward| pod
+```
+
+- **Image:** one shared `Dockerfile`, multi-stage, distroless and non-root.
+- **Cluster:** one-node kind cluster (`make cluster-up`).
+- **Deploy:** one shared Helm chart plus `deploy/values/hello.yaml`.
+- **Dev loop:** Tilt rebuilds and redeploys on save.
+
+See [ADR-0002](adr/0002-run-everything-in-docker-on-kubernetes.md) for why, and [deploy/AGENTS.md](../deploy/AGENTS.md) for the rules.

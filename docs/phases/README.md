@@ -7,7 +7,7 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | # | Phase | Page |
 |---|-------|------|
 | 0 | Go foundations + CI | [00-foundations](00-foundations.md) |
-| 1 | Docker + kind + Helm + Tilt | |
+| 1 | Docker + kind + Helm + Tilt | [01-docker-kind-helm-tilt](01-docker-kind-helm-tilt.md) |
 | 2 | Monitoring on cluster (Prometheus, Grafana) | |
 | 3 | `pkg/money` domain | |
 | 4 | Postgres via CloudNativePG + migrations | |

@@ -24,6 +24,7 @@ Format `<type>/<description>`, trunk is `main`.
 - Optional ticket ref: `feature/issue-12-ledger-postings`.
 - Examples: `feature/phase-0-foundations`, `chore/bump-go`.
 - **Never use vendor or agent prefixes** such as `claude/`, `copilot/` or `codex/`.
+- **This is deliberately stricter than the published spec** ([conventionalbranch.org](https://conventionalbranch.org)), which allows dots in any branch, AI-agent types like `claude/`, and any description after `release/`. We allow dots only in versions, ban agent types, and require `release/` to be a version. The rule lives in `scripts/check-branch-name.sh`, which `scripts/check-branch-name_test.sh` tests.
 
 ## Commits — Conventional Commits
 
@@ -57,7 +58,9 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`, `deploy/` (kind, Helm, Tilt).
+Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`.
+
+Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
 ## Commands
 
