@@ -1,10 +1,13 @@
 # CI runs these same targets, so "works on my machine" == "works in CI".
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt fmt-check vet lint test test-scripts check hooks
+SERVICE ?= hello
+IMAGE   ?= tiny-bank/$(SERVICE):dev
+
+.PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke
 
 help: ## List targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-13s %s\n", $$1, $$2}'
 
 fmt: ## Format all Go code in place
 	gofmt -w .
@@ -28,3 +31,9 @@ check: fmt-check vet lint test test-scripts ## Everything CI runs
 
 hooks: ## Use the repo's git hooks (branch-name check on push)
 	git config core.hooksPath scripts/hooks
+
+docker-build: ## Build the image for SERVICE (default hello) as IMAGE
+	docker build --build-arg PKG=./cmd/$(SERVICE) -t $(IMAGE) .
+
+docker-smoke: docker-build ## Run IMAGE, check /healthz, then check it stops cleanly on SIGTERM
+	scripts/docker-smoke.sh $(IMAGE)

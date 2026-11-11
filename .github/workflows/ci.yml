@@ -43,3 +43,10 @@ jobs:
           version: v2.15.0 # keep in step with local `golangci-lint version`; must be built with Go >= go.mod's version
       - name: go test
         run: make test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image and smoke-test it
+        run: make docker-smoke

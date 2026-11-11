@@ -1,0 +1,14 @@
+# Keep the build context small and the layer cache stable: only Go source is needed.
+.git
+.github
+.claude
+docs
+scripts
+bin
+dist
+*.md
+.env
+.env.*
+coverage.*
+*.out
+*.test

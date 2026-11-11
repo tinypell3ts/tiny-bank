@@ -32,7 +32,14 @@ go run ./cmd/hello                # PORT, LOG_LEVEL, SHUTDOWN_TIMEOUT are option
 curl localhost:8080/healthz
 ```
 
-Running the stack (kind, Helm, Tilt) arrives in Phase 1.
+Or run it as a container:
+
+```bash
+make docker-build
+docker run --rm -p 8080:8080 tiny-bank/hello:dev
+```
+
+Running the stack on Kubernetes (kind, Helm, Tilt) is coming later in Phase 1.
 
 ## Docs
 
