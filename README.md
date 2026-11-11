@@ -17,11 +17,12 @@ See [docs/architecture.md](docs/architecture.md) for the full picture.
 Prerequisites:
 
 - Go 1.27+
+- [golangci-lint](https://golangci-lint.run) v2 (`brew install golangci-lint`)
 - Docker Desktop (give it 8–12 GB RAM once the cluster arrives in Phase 1)
 
 ```bash
-go build ./...
-go test ./...
+make hooks   # once: blocks pushing badly named branches
+make check   # format check, vet, lint, tests: the same as CI
 ```
 
 Running the stack (kind, Helm, Tilt) arrives in Phase 1.

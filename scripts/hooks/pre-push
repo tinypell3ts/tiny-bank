@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Local git hook: blocks pushing a branch whose name breaks Conventional Branch.
+# Install with: make hooks
+set -euo pipefail
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+
+# The trunk is allowed as-is.
+if [[ "$branch" == "main" ]]; then
+  exit 0
+fi
+
+exec "$(git rev-parse --show-toplevel)/scripts/check-branch-name.sh" "$branch"
