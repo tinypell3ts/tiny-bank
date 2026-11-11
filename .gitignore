@@ -1,0 +1,20 @@
+# Build output
+/bin/
+/dist/
+
+# Go test artefacts
+*.test
+*.out
+coverage.*
+
+# Local config and secrets — never commit real values
+.env
+.env.*
+!.env.example
+*.kubeconfig
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
