@@ -13,13 +13,17 @@ import (
 	"time"
 )
 
-// serve runs the HTTP server on ln until ctx is cancelled, then shuts down gracefully:
-// it stops reporting ready, stops accepting new connections and lets in-flight
+// serve runs h on ln until ctx is cancelled, then shuts down gracefully:
+// it sets ready to false, stops accepting new connections and lets in-flight
 // requests finish (up to shutdownTimeout).
-func serve(ctx context.Context, ln net.Listener, logger *slog.Logger, shutdownTimeout time.Duration) error {
-	var ready atomic.Bool
+//
+// The handler and ready flag are passed in, not built here, so tests can use a
+// handler that holds a request open during shutdown.
+func serve(ctx context.Context, ln net.Listener, h http.Handler, ready *atomic.Bool,
+	logger *slog.Logger, shutdownTimeout time.Duration,
+) error {
 	srv := &http.Server{
-		Handler:           newHandler(logger, &ready),
+		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second, // guards against slow-header (Slowloris) clients
 	}
 

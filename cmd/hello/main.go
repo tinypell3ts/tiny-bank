@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -41,5 +42,6 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 		return fmt.Errorf("listen: %w", err)
 	}
 
-	return serve(ctx, ln, logger, cfg.ShutdownTimeout)
+	var ready atomic.Bool
+	return serve(ctx, ln, newHandler(logger, &ready), &ready, logger, cfg.ShutdownTimeout)
 }

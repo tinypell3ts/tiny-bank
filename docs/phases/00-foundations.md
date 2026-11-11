@@ -23,6 +23,7 @@
 - **Untrusted input in logs.** Incoming request IDs are length- and character-checked, so a caller can't forge log lines with newlines.
 - **Testable `main`.** `main` only wires the OS (signals, `os.Getenv`, stdout) into `run`. Tests call `run`, `serve` and `loadConfig` with fakes.
 - **Testing:** table-driven tests, `httptest` for handlers without a network, and a real listener on `127.0.0.1:0` to test shutdown. `-race` catches data races, which is why `ready` is an `atomic.Bool`.
+- **Test the behaviour you claim.** One shutdown test holds a request open during shutdown and checks that `serve` waits for it, and another checks that `serve` gives up after the timeout. A test against an idle server would still pass if graceful shutdown were replaced by an immediate kill. We checked this by making exactly that change and watching the new tests fail.
 - **CI basics:** workflows, jobs, steps, read-only `permissions`, `concurrency` to cancel stale runs, and passing `github.head_ref` through `env` to avoid script injection.
 
 ## How to verify
