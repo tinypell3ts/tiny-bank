@@ -159,11 +159,14 @@ func TestStatusRecorder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// A real server, so we compare with what the client actually receives.
-			var recorded int
+			// The handler runs on the server's goroutine, so the recorded status
+			// comes back over a channel: receiving the HTTP response alone doesn't
+			// order the two goroutines' memory accesses.
+			recorded := make(chan int, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				rec := NewStatusRecorder(w)
 				tt.handler(rec)
-				recorded = rec.Status()
+				recorded <- rec.Status()
 			}))
 			defer srv.Close()
 
@@ -177,8 +180,8 @@ func TestStatusRecorder(t *testing.T) {
 			if resp.StatusCode != tt.want {
 				t.Fatalf("client got %d, test expects %d", resp.StatusCode, tt.want)
 			}
-			if recorded != resp.StatusCode {
-				t.Errorf("recorded %d, client got %d", recorded, resp.StatusCode)
+			if got := <-recorded; got != resp.StatusCode {
+				t.Errorf("recorded %d, client got %d", got, resp.StatusCode)
 			}
 		})
 	}
