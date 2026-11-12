@@ -65,8 +65,10 @@ cluster-down: ## Delete the local kind cluster and everything in it
 image-load: docker-build ## Build IMAGE and copy it into the kind cluster's node
 	kind load docker-image $(IMAGE) --name $(CLUSTER)
 
+# Every service's values, plus deploy/charts/service/ci/*.yaml, which turn on
+# chart features no service uses yet (like a database) so they're checked too.
 chart-check: ## Lint the chart and validate its output for every service (brew install kubeconform)
-	@for v in deploy/values/*.yaml; do \
+	@for v in deploy/values/*.yaml $(CHART)/ci/*.yaml; do \
 		echo "--- $$v"; \
 		helm lint $(CHART) -f $$v --strict || exit 1; \
 		helm template $$(basename $$v .yaml) $(CHART) -f $$v | kubeconform -strict -summary \

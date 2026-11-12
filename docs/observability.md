@@ -75,6 +75,10 @@ Turned off for a one-node dev cluster:
 
 Prometheus picks up every `ServiceMonitor` in the cluster, not only ones from this Helm release, so services can bring their own. The shared chart creates one per service ([servicemonitor.yaml](../deploy/charts/service/templates/servicemonitor.yaml)), so every service is scraped on its `http` port at `/metrics`. Each series gets `job` (the service name), `namespace` and `pod` labels. Check it in Prometheus under *Status → Targets*.
 
+### Postgres
+
+Each service database (`database.enabled` in the chart) comes with a `PodMonitor`, so Prometheus scrapes its Postgres metrics: connections, transactions, replication lag, database size and more (`cnpg_*` series). The CloudNativePG operator adds its own Grafana dashboard, *CloudNativePG*, which shows them per cluster. The operator itself is scraped too.
+
 ### Dashboards
 
 [tiny-bank / Services (RED)](http://localhost:3000/d/tiny-bank-services) shows every service's real traffic, with a picker to choose services:

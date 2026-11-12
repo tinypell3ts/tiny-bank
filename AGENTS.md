@@ -80,7 +80,7 @@ make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
 make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
 make undeploy                 # helm-uninstall SERVICE
-make chart-check              # helm lint + kubeconform (incl. ServiceMonitor schema) for every deploy/values/*.yaml
+make chart-check              # helm lint + kubeconform (incl. CRD schemas) for every deploy/values/*.yaml and chart ci/*.yaml
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
 make cnpg                     # install or upgrade the CloudNativePG operator in "cnpg-system" (make dev does this)

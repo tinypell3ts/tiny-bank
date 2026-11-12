@@ -1,0 +1,7 @@
+# Extra settings `make chart-check` renders the chart with, so templates that
+# no real service turns on yet are still linted and validated.
+name: chart-ci-db
+image:
+  repository: tiny-bank/hello
+database:
+  enabled: true
