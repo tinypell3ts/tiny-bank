@@ -44,7 +44,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 
   One histogram covers rate, errors and duration, because every histogram already counts its observations. A separate request counter would double the series for no extra answers. Metric and label names follow the [OpenTelemetry HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/), so dashboards and queries keep working when OpenTelemetry arrives in Phase 8.
 
-  `http_route` is the matched route pattern (`/accounts/{id}`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`.
+  `http_route` is the matched route pattern (`/accounts/{id}`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`. Methods outside the standard set (`GET`, `POST`, …) are labelled `_OTHER`, so a caller can't create new series by inventing methods. The status code is the final one the client received: informational `1xx` responses and ignored second `WriteHeader` calls don't count.
 
   Example PromQL queries, once Prometheus is running later in Phase 2:
 

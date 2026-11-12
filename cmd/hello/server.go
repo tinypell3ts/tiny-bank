@@ -152,29 +152,15 @@ func validRequestID(id string) bool {
 func withAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		rec := obs.NewStatusRecorder(w)
 		next.ServeHTTP(rec, r)
 
 		logger.LogAttrs(r.Context(), slog.LevelInfo, "http request",
 			slog.String("request_id", requestIDFrom(r.Context())),
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
-			slog.Int("status", rec.status),
+			slog.Int("status", rec.Status()),
 			slog.Float64("duration_ms", float64(time.Since(start))/float64(time.Millisecond)),
 		)
 	})
 }
-
-// statusRecorder remembers the status code a handler wrote, for logging.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-// Unwrap lets http.ResponseController reach the underlying writer (e.g. to flush).
-func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }

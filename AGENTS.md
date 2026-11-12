@@ -47,7 +47,7 @@ Current:
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, metrics, graceful shutdown
-├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware
+├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service

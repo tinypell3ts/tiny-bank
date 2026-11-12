@@ -77,11 +77,11 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 		defer m.active.Dec()
 
 		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		rec := NewStatusRecorder(w)
 		next.ServeHTTP(rec, r)
 
 		// The mux sets r.Pattern on this same request while routing it.
-		m.duration.WithLabelValues(r.Method, routeOf(r.Pattern), strconv.Itoa(rec.status)).
+		m.duration.WithLabelValues(methodOf(r.Method), routeOf(r.Pattern), strconv.Itoa(rec.Status())).
 			Observe(time.Since(start).Seconds())
 	})
 }
@@ -98,16 +98,63 @@ func routeOf(pattern string) string {
 	return pattern
 }
 
-// statusRecorder remembers the status code a handler wrote.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
+// knownMethods are the standard HTTP methods. Anything else a caller sends is
+// recorded as "_OTHER" (the OpenTelemetry convention), because the method comes
+// straight from the client: without this, a caller could send CUSTOM1, CUSTOM2, …
+// and create a new time series, using more memory, for every one.
+var knownMethods = map[string]bool{
+	http.MethodConnect: true, http.MethodDelete: true, http.MethodGet: true,
+	http.MethodHead: true, http.MethodOptions: true, http.MethodPatch: true,
+	http.MethodPost: true, http.MethodPut: true, http.MethodTrace: true,
 }
 
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
+func methodOf(method string) string {
+	if knownMethods[method] {
+		return method
+	}
+	return "_OTHER"
+}
+
+// StatusRecorder wraps an http.ResponseWriter and remembers the final status
+// code actually sent to the client, for metrics and access logs.
+//
+// "Final" matters: a handler may send informational 1xx responses (like
+// 103 Early Hints) before the real one, and net/http ignores any WriteHeader
+// after the first final status. If the handler never calls WriteHeader, the
+// status is the implicit 200 that net/http sends.
+type StatusRecorder struct {
+	http.ResponseWriter
+	status int // 0 until a final status is sent
+}
+
+// NewStatusRecorder wraps w.
+func NewStatusRecorder(w http.ResponseWriter) *StatusRecorder {
+	return &StatusRecorder{ResponseWriter: w}
+}
+
+// Status returns the final status code sent, or 200 if nothing was written yet.
+func (r *StatusRecorder) Status() int {
+	if r.status == 0 {
+		return http.StatusOK
+	}
+	return r.status
+}
+
+// WriteHeader records the first final (non-1xx) status and passes the call on.
+func (r *StatusRecorder) WriteHeader(code int) {
+	if r.status == 0 && code >= http.StatusOK {
+		r.status = code
+	}
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Write records the implicit 200 when the body starts without a WriteHeader.
+func (r *StatusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
+}
+
 // Unwrap lets http.ResponseController reach the underlying writer (e.g. to flush).
-func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+func (r *StatusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }

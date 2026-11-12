@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,6 +111,76 @@ func TestHandlerExposesMetrics(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics output missing %q", want)
 		}
+	}
+}
+
+func TestMiddlewareBoundsUnknownMethods(t *testing.T) {
+	_, m, h := newTestServer(t)
+	for i := range 50 {
+		do(t, h, fmt.Sprintf("CUSTOM%d", i), "/accounts/1")
+	}
+
+	if got := sampleCount(t, m.duration.WithLabelValues("_OTHER", "unmatched", "405")); got != 50 {
+		t.Errorf("_OTHER requests = %v, want 50", got)
+	}
+	if n := testutil.CollectAndCount(m.duration); n != 1 {
+		t.Errorf("duration has %d series, want 1: unknown methods must share one label", n)
+	}
+}
+
+func TestStatusRecorder(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler func(w http.ResponseWriter)
+		want    int
+	}{
+		{"nothing written is an implicit 200", func(http.ResponseWriter) {}, 200},
+		{"body without WriteHeader is an implicit 200", func(w http.ResponseWriter) {
+			_, _ = io.WriteString(w, "hi")
+		}, 200},
+		{"explicit status", func(w http.ResponseWriter) { w.WriteHeader(http.StatusTeapot) }, 418},
+		{"1xx is skipped for the final status", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusEarlyHints)
+			_, _ = io.WriteString(w, "body") // client gets 200
+		}, 200},
+		{"1xx then explicit final status", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusEarlyHints)
+			w.WriteHeader(http.StatusCreated)
+		}, 201},
+		{"a second WriteHeader is ignored, as net/http does", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(http.StatusOK)
+		}, 500},
+		{"WriteHeader after the body is ignored", func(w http.ResponseWriter) {
+			_, _ = io.WriteString(w, "body")
+			w.WriteHeader(http.StatusInternalServerError)
+		}, 200},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A real server, so we compare with what the client actually receives.
+			var recorded int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				rec := NewStatusRecorder(w)
+				tt.handler(rec)
+				recorded = rec.Status()
+			}))
+			defer srv.Close()
+
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+
+			if resp.StatusCode != tt.want {
+				t.Fatalf("client got %d, test expects %d", resp.StatusCode, tt.want)
+			}
+			if recorded != resp.StatusCode {
+				t.Errorf("recorded %d, client got %d", recorded, resp.StatusCode)
+			}
+		})
 	}
 }
 
