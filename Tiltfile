@@ -27,8 +27,9 @@ def go_service(name, port):
         name=name,
         values=['deploy/values/%s.yaml' % name],
     ))
-    # Wait for the monitoring stack: the chart's ServiceMonitor needs its CRD.
-    k8s_resource(name, port_forwards='%d:8080' % port, resource_deps=['monitoring'], labels=['services'])
+    # Wait for the operators whose CRDs the shared chart uses: monitoring for the
+    # ServiceMonitor, CloudNativePG for databases. (cnpg itself waits for monitoring.)
+    k8s_resource(name, port_forwards='%d:8080' % port, resource_deps=['monitoring', 'cnpg'], labels=['services'])
 
 # One line per service. Each gets its own localhost port.
 go_service('hello', port=8080)
@@ -52,6 +53,18 @@ local_resource(
     deps=['deploy/monitoring/dashboards'],
     resource_deps=['monitoring'],
     labels=['monitoring'],
+)
+
+# --- Postgres: the CloudNativePG operator ---
+# Same pattern as monitoring: plain Helm through `make cnpg`, rerun only when
+# its values change, left running by `tilt down`. It waits for monitoring
+# because it creates a PodMonitor, which needs the monitoring stack's CRDs.
+local_resource(
+    'cnpg',
+    cmd='make cnpg',
+    deps=['deploy/cnpg/values.yaml'],
+    resource_deps=['monitoring'],
+    labels=['postgres'],
 )
 
 def forward(name, service, port, target):

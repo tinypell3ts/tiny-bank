@@ -44,6 +44,16 @@ jobs:
       - name: go test
         run: make test
 
+  integration:
+    runs-on: ubuntu-latest # has Docker, which testcontainers needs
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Integration tests (real Postgres in Docker)
+        run: make test-integration
+
   docker:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,34 @@
+{{- if .Values.database.enabled }}
+# The service's own Postgres, run by the CloudNativePG operator (`make cnpg`).
+# The operator creates the pods, storage, a read-write Service (<name>-db-rw)
+# and a secret (<name>-db-app) with a generated user and password for the
+# database "app". The Deployment reads its connection string from that secret.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "service.dbName" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.database.instances }}
+  storage:
+    size: {{ .Values.database.storage }}
+  resources:
+    {{- toYaml .Values.database.resources | nindent 4 }}
+---
+# Lets Prometheus scrape Postgres metrics (connections, transactions, replication)
+# from every instance. CloudNativePG asks for this to be created by hand: its
+# built-in `enablePodMonitor` is deprecated.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "service.dbName" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "service.dbName" . }}
+  podMetricsEndpoints:
+    - port: metrics
+{{- end }}

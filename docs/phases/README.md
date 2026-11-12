@@ -10,8 +10,8 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | 1 | Docker + kind + Helm + Tilt | [01-docker-kind-helm-tilt](01-docker-kind-helm-tilt.md) |
 | 2 | Monitoring on cluster (Prometheus, Grafana) | [02-monitoring](02-monitoring.md) |
 | 3 | `pkg/money` domain | [03-money](03-money.md) |
-| 4 | Postgres via CloudNativePG + migrations | |
-| 5 | Account service (HTTP/JSON) on k8s | |
+| 4 | Postgres via CloudNativePG + migrations | [04-postgres](04-postgres.md) |
+| 5 | Account service (HTTP/JSON) on k8s, its `accounts` table and `/readyz` database check | |
 | 5.5 | Extract `pkg/kit` + `pkg/terrors` (Typhon-style filters) | |
 | 6 | Protobuf + gRPC | |
 | 7 | Ledger service (double-entry) | |

@@ -32,6 +32,21 @@ config:
 serviceMonitor:
   enabled: true
 
+# Give the service its own Postgres database, run by CloudNativePG (`make cnpg`).
+# The chart creates a Cluster named <name>-db and passes its connection string
+# to the app as DATABASE_URL, read from the secret the operator generates.
+# Off by default: only services that store data turn it on.
+database:
+  enabled: false
+  instances: 1 # one is enough locally; 3 gives a primary plus two standbys for failover
+  storage: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi # no CPU limit, as for the app
+
 resources:
   requests:
     cpu: 50m # 5% of one CPU: what the scheduler reserves

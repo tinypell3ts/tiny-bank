@@ -16,3 +16,8 @@ app.kubernetes.io/part-of: tiny-bank
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end -}}
+
+{{/* Name of the service's CloudNativePG Cluster. The operator names its secret <this>-app. */}}
+{{- define "service.dbName" -}}
+{{ include "service.name" . }}-db
+{{- end -}}

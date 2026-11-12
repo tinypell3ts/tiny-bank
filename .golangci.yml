@@ -1,6 +1,11 @@
 # golangci-lint v2 config. Start small and add linters when they catch real problems.
 version: "2"
 
+run:
+  # Lint integration test files too (//go:build integration).
+  build-tags:
+    - integration
+
 linters:
   default: standard # errcheck, govet, ineffassign, staticcheck, unused
   enable:
