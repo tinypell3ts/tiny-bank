@@ -2,7 +2,7 @@
 
 A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 3, done. One demo service, `cmd/hello`, running in Docker on a local Kubernetes cluster with a one-command dev loop, Prometheus and Grafana, and a shared `pkg/money` type for amounts.
+> **Status:** Phase 4, done. One demo service, `cmd/hello`, running in Docker on a local Kubernetes cluster with a one-command dev loop, Prometheus and Grafana, a shared `pkg/money` type for amounts, and Postgres for services: CloudNativePG on the cluster, `pkg/db` for connections and migrations.
 
 ## What it will be
 
