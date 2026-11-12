@@ -7,11 +7,15 @@ CLUSTER ?= tiny-bank
 KUBECTX := kind-$(CLUSTER)
 CHART   := deploy/charts/service
 
+# Monitoring stack: Prometheus Operator, Prometheus, Grafana, kube-state-metrics.
+MONITORING_CHART         := oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
+MONITORING_CHART_VERSION := 93.2.2
+
 .PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dev dev-down
 
 help: ## List targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-13s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
 
 fmt: ## Format all Go code in place
 	gofmt -w .
@@ -64,6 +68,14 @@ deploy: docker-build ## Build IMAGE and deploy exactly that build of SERVICE to 
 
 undeploy: ## Remove SERVICE from the kind cluster
 	helm uninstall $(SERVICE) --kube-context $(KUBECTX)
+
+monitoring: ## Install or upgrade Prometheus + Grafana in the "monitoring" namespace (make dev does this too)
+	helm upgrade --install monitoring $(MONITORING_CHART) --version $(MONITORING_CHART_VERSION) \
+		--kube-context $(KUBECTX) --namespace monitoring --create-namespace \
+		-f deploy/monitoring/values.yaml --wait --timeout 5m
+
+monitoring-down: ## Remove the monitoring stack (its CRDs stay, as Helm never deletes CRDs)
+	helm uninstall monitoring --kube-context $(KUBECTX) --namespace monitoring
 
 dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
 	tilt up --context $(KUBECTX)

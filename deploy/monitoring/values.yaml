@@ -1,0 +1,80 @@
+# kube-prometheus-stack settings for the LOCAL kind cluster only.
+# Installed by `make monitoring` (and by `make dev` through the Tiltfile).
+# The chart version is pinned in the Makefile (MONITORING_CHART_VERSION).
+#
+# The stack bundles the Prometheus Operator, Prometheus, Grafana and
+# kube-state-metrics. We switch off what a one-node dev cluster doesn't need.
+
+# Short names: services become monitoring-prometheus, monitoring-grafana, …
+fullnameOverride: monitoring
+
+# Alerts arrive in Phase 13. Until then there's nobody to page.
+alertmanager:
+  enabled: false
+
+# kind runs these control-plane parts bound to 127.0.0.1 inside the node, so
+# Prometheus can't scrape them and they would show as permanently "down".
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# Host-level metrics (disk, network) for the Docker VM aren't useful locally,
+# and node-exporter's host mounts often fail under Docker Desktop. Container
+# CPU and memory still come from the kubelet.
+nodeExporter:
+  enabled: false
+
+# Keep the bundled rules (Grafana's built-in Kubernetes dashboards need its
+# recording rules), minus those for the parts switched off above.
+defaultRules:
+  rules:
+    alertmanager: false
+    nodeExporterAlerting: false
+    nodeExporterRecording: false
+  disabled:
+    # Fires forever without an Alertmanager, which we don't run yet.
+    PrometheusNotConnectedToAlertmanagers: true
+
+prometheus:
+  prometheusSpec:
+    # Pick up EVERY ServiceMonitor/PodMonitor in the cluster, not only ones
+    # labelled with this Helm release. Our services add their own in the
+    # shared chart.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    # A dev cluster only needs recent data.
+    retention: 1d
+    resources:
+      requests:
+        cpu: 100m
+        memory: 400Mi
+      limits:
+        memory: 1Gi
+
+grafana:
+  # Local only: no login, everyone is admin. Grafana is reachable only through
+  # the localhost port-forward. Never reuse these settings outside kind.
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Admin
+    auth:
+      disable_login_form: true
+  sidecar:
+    datasources:
+      alertmanager:
+        enabled: false # no Alertmanager to point at
+  # Grafana peaks at startup (database migrations, loading ~20 dashboards):
+  # 256Mi gets it OOM-killed.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 512Mi

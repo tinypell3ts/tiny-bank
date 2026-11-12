@@ -16,7 +16,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 |-------|------|
 | 0 | JSON logs, `/healthz` + `/readyz` |
 | 1 | Kubernetes liveness/readiness probes using those endpoints, logs via `kubectl logs` and the Tilt dashboard ✅ |
-| 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana |
+| 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana (in progress) |
 | 6 | Request ID in gRPC metadata, logging/metrics interceptors |
 | 7 | Ledger audit trail and business metrics |
 | 8 | OpenTelemetry tracing across services |
@@ -46,7 +46,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 
   `http_route` is the matched route pattern (`/accounts/{id}`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`. Methods outside the standard set (`GET`, `POST`, …) are labelled `_OTHER`, so a caller can't create new series by inventing methods. The status code is the final one the client received: informational `1xx` responses and ignored second `WriteHeader` calls don't count.
 
-  Example PromQL queries, once Prometheus is running later in Phase 2:
+  Example PromQL queries, for Prometheus at localhost:9090 once it scrapes the service (the next Phase 2 step adds that):
 
   ```promql
   sum by (http_route) (rate(http_server_request_duration_seconds_count[5m]))            # rate
@@ -54,3 +54,22 @@ A bank must be able to answer **"what happened to this customer's money, and why
     / sum(rate(http_server_request_duration_seconds_count[5m]))                         # error ratio
   histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))  # p95 latency
   ```
+
+### On the cluster
+
+`make dev` (or `make monitoring` on its own) installs [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) into the `monitoring` namespace, with settings in [deploy/monitoring/values.yaml](../deploy/monitoring/values.yaml):
+
+| Part | What it does | Local URL |
+|---|---|---|
+| Prometheus Operator | Watches `ServiceMonitor` objects and turns them into Prometheus scrape config | |
+| Prometheus | Scrapes `/metrics` every 30s and stores 1 day of data | [localhost:9090](http://localhost:9090) |
+| Grafana | Charts. Comes with ~20 Kubernetes dashboards. No login locally | [localhost:3000](http://localhost:3000) |
+| kube-state-metrics | Kubernetes object state: pod restarts, replicas, resource requests | |
+
+Turned off for a one-node dev cluster:
+- Alertmanager, until alert rules arrive in Phase 13.
+- node-exporter, because host metrics for the Docker VM aren't useful.
+- Scraping etcd, the scheduler, the controller manager and kube-proxy, which kind doesn't expose.
+
+Prometheus picks up every `ServiceMonitor` in the cluster, not only ones from this Helm release, so services can bring their own.
+

@@ -8,6 +8,7 @@ Rules for everything under `deploy/`. The root [AGENTS.md](../AGENTS.md) still a
 deploy/
 ├── kind/cluster.yaml     # local cluster: one node, name set by CLUSTER in the Makefile
 ├── charts/service/       # THE chart, shared by every service
+├── monitoring/values.yaml # kube-prometheus-stack settings for the local cluster
 └── values/<service>.yaml # per-service settings, kept as small as possible
 ```
 
@@ -21,6 +22,8 @@ deploy/
 - **Liveness never checks dependencies.** `/healthz` reports only "the process is alive". Database or Kafka checks belong in `/readyz`, otherwise a dependency blip restarts every pod at once.
 - **Keep shutdown timings consistent.** `terminationGracePeriodSeconds` is computed as `preStopSleepSeconds + shutdownTimeoutSeconds + 5`. Change those two values, never the grace period directly. The app reads `SHUTDOWN_TIMEOUT` from the same value.
 - **Memory limit, no CPU limit.** Set memory requests and limits, and CPU requests only. CPU limits throttle the app even on an idle node.
+- **Third-party charts are pinned.** The monitoring chart's version lives in the Makefile (`MONITORING_CHART_VERSION`). Bump it on purpose, run `make monitoring`, and check Grafana and Prometheus targets before committing.
+- **`deploy/monitoring/values.yaml` is local-only.** Grafana has no login and everyone is admin. Never reuse it for a shared cluster.
 - **Don't mix `make dev` and `make deploy` for the same service.** Both create the same resources. Use `make dev-down` or `make undeploy` first.
 
 ## Checking changes

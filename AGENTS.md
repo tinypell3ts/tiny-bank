@@ -51,6 +51,7 @@ Current:
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
+│   ├── monitoring/      # kube-prometheus-stack values (Prometheus + Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
     ├── architecture.md  # evolving architecture diagram
@@ -78,11 +79,13 @@ make cluster-down             # delete the cluster
 make deploy                   # build SERVICE (default hello) and helm-install exactly that build on the cluster
 make undeploy                 # helm-uninstall SERVICE
 make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
+make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
+make monitoring-down          # remove the monitoring stack
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
-make dev-down                 # remove what Tilt deployed (cluster stays up)
+make dev-down                 # remove what Tilt deployed (cluster and monitoring stay up)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 3000 (Grafana) and 9090 (Prometheus) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
