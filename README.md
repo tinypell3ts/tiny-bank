@@ -46,7 +46,7 @@ make dev            # creates the cluster if needed, then starts Tilt
 curl localhost:8080/healthz
 ```
 
-Tilt builds the image, deploys it with Helm and forwards `localhost:8080`. It also installs Prometheus and Grafana: Grafana is at [localhost:3000](http://localhost:3000) (no login locally) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (monitoring stays; `make monitoring-down` removes it), and `make cluster-down` to delete the cluster.
+Tilt builds the image, deploys it with Helm and forwards `localhost:8080`. It also installs Prometheus and Grafana: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (monitoring stays; `make monitoring-down` removes it), and `make cluster-down` to delete the cluster.
 
 Without Tilt, for a one-off deploy:
 

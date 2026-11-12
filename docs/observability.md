@@ -16,7 +16,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 |-------|------|
 | 0 | JSON logs, `/healthz` + `/readyz` |
 | 1 | Kubernetes liveness/readiness probes using those endpoints, logs via `kubectl logs` and the Tilt dashboard ✅ |
-| 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana (in progress) |
+| 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard (in progress) |
 | 6 | Request ID in gRPC metadata, logging/metrics interceptors |
 | 7 | Ledger audit trail and business metrics |
 | 8 | OpenTelemetry tracing across services |
@@ -72,4 +72,16 @@ Turned off for a one-node dev cluster:
 - Scraping etcd, the scheduler, the controller manager and kube-proxy, which kind doesn't expose.
 
 Prometheus picks up every `ServiceMonitor` in the cluster, not only ones from this Helm release, so services can bring their own. The shared chart creates one per service ([servicemonitor.yaml](../deploy/charts/service/templates/servicemonitor.yaml)), so every service is scraped on its `http` port at `/metrics`. Each series gets `job` (the service name), `namespace` and `pod` labels. Check it in Prometheus under *Status → Targets*.
+
+### Dashboards
+
+[tiny-bank / Services (RED)](http://localhost:3000/d/tiny-bank-services) shows every service's real traffic, with a picker to choose services:
+
+- Requests per second, 5xx error ratio and p95 latency at a glance.
+- Requests per second by route and by status code.
+- Latency by route at p50, p95 and p99.
+
+It leaves out Kubernetes probes (`/healthz`, `/readyz`) and Prometheus scrapes (`/metrics`). Kubernetes calls the probes every few seconds, so they would otherwise swamp real traffic and make latency look better than it is. 4xx responses count as traffic but not as errors, because they are the caller's mistake.
+
+The dashboard is [a JSON file in git](../deploy/monitoring/dashboards/tiny-bank-services.json). `make dashboards` puts it in a ConfigMap labelled `grafana_dashboard=1`, and Grafana's sidecar container loads it within seconds. Under `make dev`, Tilt does this every time the file is saved.
 

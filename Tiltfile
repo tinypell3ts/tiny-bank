@@ -45,6 +45,15 @@ local_resource(
     labels=['monitoring'],
 )
 
+# Edit a dashboard JSON file and save: Grafana shows the change within seconds.
+local_resource(
+    'dashboards',
+    cmd='make dashboards',
+    deps=['deploy/monitoring/dashboards'],
+    resource_deps=['monitoring'],
+    labels=['monitoring'],
+)
+
 def forward(name, service, port, target):
     """Forward localhost:<port> to a service in the monitoring namespace."""
     local_resource(

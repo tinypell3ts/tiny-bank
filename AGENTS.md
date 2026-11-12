@@ -51,7 +51,7 @@ Current:
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
-│   ├── monitoring/      # kube-prometheus-stack values (Prometheus + Grafana) for the local cluster
+│   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
     ├── architecture.md  # evolving architecture diagram
@@ -81,6 +81,8 @@ make undeploy                 # helm-uninstall SERVICE
 make chart-check              # helm lint + kubeconform (incl. ServiceMonitor schema) for every deploy/values/*.yaml
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
+make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
+make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
 make dev-down                 # remove what Tilt deployed (cluster and monitoring stay up)
 ```

@@ -65,3 +65,5 @@ jobs:
         run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
       - name: Lint chart and validate manifests
         run: make chart-check
+      - name: Validate Grafana dashboards
+        run: make dashboards-check

@@ -17,7 +17,7 @@ MONITORING_CHART_VERSION := 93.2.2
 CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdde38b5fecd0f8436ec5f3aa3679a3b86/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
 .PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -79,6 +79,21 @@ monitoring: ## Install or upgrade Prometheus + Grafana in the "monitoring" names
 	helm upgrade --install monitoring $(MONITORING_CHART) --version $(MONITORING_CHART_VERSION) \
 		--kube-context $(KUBECTX) --namespace monitoring --create-namespace \
 		-f deploy/monitoring/values.yaml --wait --timeout 5m
+	@$(MAKE) --no-print-directory dashboards
+
+# Grafana's sidecar loads any ConfigMap labelled grafana_dashboard=1, so our
+# dashboards are plain JSON files in git, not something clicked together in the UI.
+dashboards: ## Load deploy/monitoring/dashboards/*.json into Grafana (part of make monitoring)
+	kubectl --context $(KUBECTX) -n monitoring create configmap tiny-bank-dashboards \
+		--from-file=deploy/monitoring/dashboards/ --dry-run=client -o yaml \
+		| kubectl --context $(KUBECTX) label --local -f - grafana_dashboard=1 -o yaml \
+		| kubectl --context $(KUBECTX) apply -f -
+
+dashboards-check: ## Check every dashboard is valid JSON with a uid, a title and panels
+	@for f in deploy/monitoring/dashboards/*.json; do \
+		jq -e '(.uid | type == "string") and (.title | type == "string") and (.panels | length > 0)' $$f >/dev/null \
+			|| { echo "invalid dashboard: $$f"; exit 1; }; \
+	done; echo "ok: dashboards"
 
 monitoring-down: ## Remove the monitoring stack (its CRDs stay, as Helm never deletes CRDs)
 	helm uninstall monitoring --kube-context $(KUBECTX) --namespace monitoring

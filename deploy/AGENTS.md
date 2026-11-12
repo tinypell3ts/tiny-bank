@@ -9,6 +9,7 @@ deploy/
 ├── kind/cluster.yaml     # local cluster: one node, name set by CLUSTER in the Makefile
 ├── charts/service/       # THE chart, shared by every service
 ├── monitoring/values.yaml # kube-prometheus-stack settings for the local cluster
+├── monitoring/dashboards/ # Grafana dashboards as JSON, loaded by `make dashboards`
 └── values/<service>.yaml # per-service settings, kept as small as possible
 ```
 
@@ -25,6 +26,7 @@ deploy/
 - **Third-party charts are pinned.** The monitoring chart's version lives in the Makefile (`MONITORING_CHART_VERSION`). Bump it on purpose, run `make monitoring`, and check Grafana and Prometheus targets before committing.
 - **`deploy/monitoring/values.yaml` is local-only.** Grafana has no login and everyone is admin. Never reuse it for a shared cluster.
 - **Every service is scraped.** The chart creates a `ServiceMonitor` for each service, so Prometheus scrapes `GET /metrics` on the `http` port without extra setup. That needs the monitoring stack's CRDs, so the monitoring stack is installed first: Tilt waits for it, and `scripts/deploy.sh` stops with "Run: make monitoring" if it's missing.
+- **Dashboards live in git.** Grafana dashboards are JSON files in `monitoring/dashboards/`, each with a fixed `uid`. Changes made in the Grafana UI are lost when its pod restarts, so build in the UI, then use *Export → Export as JSON* and save over the file. Panels about service traffic filter out probes and scrapes with `http_route!~"/healthz|/readyz|/metrics"`.
 - **Custom resources are validated too.** `make chart-check` checks custom types like `ServiceMonitor` against schemas from the [CRDs catalog](https://github.com/datreeio/CRDs-catalog), pinned to one commit by `CRD_SCHEMAS` in the Makefile. A new custom type must have a schema there, otherwise the check fails.
 - **Don't mix `make dev` and `make deploy` for the same service.** Both create the same resources. Use `make dev-down` or `make undeploy` first.
 
