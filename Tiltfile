@@ -27,7 +27,42 @@ def go_service(name, port):
         name=name,
         values=['deploy/values/%s.yaml' % name],
     ))
-    k8s_resource(name, port_forwards='%d:8080' % port, labels=['services'])
+    # Wait for the monitoring stack: the chart's ServiceMonitor needs its CRD.
+    k8s_resource(name, port_forwards='%d:8080' % port, resource_deps=['monitoring'], labels=['services'])
 
 # One line per service. Each gets its own localhost port.
 go_service('hello', port=8080)
+
+# --- Monitoring: Prometheus + Grafana (kube-prometheus-stack) ---
+# Installed with plain Helm through `make monitoring`, so it works the same with
+# or without Tilt, and the chart's CRDs are handled by Helm. It reruns only when
+# the values file changes. `tilt down` leaves it running (it's slow to install);
+# `make monitoring-down` removes it.
+local_resource(
+    'monitoring',
+    cmd='make monitoring',
+    deps=['deploy/monitoring/values.yaml'],
+    labels=['monitoring'],
+)
+
+# Edit a dashboard JSON file and save: Grafana shows the change within seconds.
+local_resource(
+    'dashboards',
+    cmd='make dashboards',
+    deps=['deploy/monitoring/dashboards'],
+    resource_deps=['monitoring'],
+    labels=['monitoring'],
+)
+
+def forward(name, service, port, target):
+    """Forward localhost:<port> to a service in the monitoring namespace."""
+    local_resource(
+        name,
+        serve_cmd='kubectl --context %s -n monitoring port-forward svc/%s %d:%d' % (CONTEXT, service, port, target),
+        resource_deps=['monitoring'],
+        links=[link('http://localhost:%d' % port, name)],
+        labels=['monitoring'],
+    )
+
+forward('grafana', 'monitoring-grafana', 3000, 80)
+forward('prometheus', 'monitoring-prometheus', 9090, 9090)

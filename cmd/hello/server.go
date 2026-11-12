@@ -11,6 +11,10 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // serve runs h on ln until ctx is cancelled, then shuts down gracefully:
@@ -56,14 +60,19 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, ready *atomic.B
 	return nil
 }
 
-// newHandler wires routes and middleware. Request ID runs first so the access log can include it.
-func newHandler(logger *slog.Logger, ready *atomic.Bool) http.Handler {
+// newHandler wires routes and middleware, outermost first:
+//   - request ID, so everything after it can use the ID
+//   - access log, one line per request
+//   - metrics, directly around the mux so it can read the matched route
+func newHandler(logger *slog.Logger, ready *atomic.Bool, reg *prometheus.Registry) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleHello)
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /readyz", handleReadyz(ready))
+	mux.Handle("GET /metrics", obs.Handler(reg)) // scraped by Prometheus
 
-	return withRequestID(withAccessLog(logger, mux))
+	metrics := obs.NewHTTPMetrics(reg)
+	return withRequestID(withAccessLog(logger, metrics.Middleware(mux)))
 }
 
 func handleHello(w http.ResponseWriter, _ *http.Request) {
@@ -143,29 +152,15 @@ func validRequestID(id string) bool {
 func withAccessLog(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		rec := obs.NewStatusRecorder(w)
 		next.ServeHTTP(rec, r)
 
 		logger.LogAttrs(r.Context(), slog.LevelInfo, "http request",
 			slog.String("request_id", requestIDFrom(r.Context())),
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
-			slog.Int("status", rec.status),
+			slog.Int("status", rec.Status()),
 			slog.Float64("duration_ms", float64(time.Since(start))/float64(time.Millisecond)),
 		)
 	})
 }
-
-// statusRecorder remembers the status code a handler wrote, for logging.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-// Unwrap lets http.ResponseController reach the underlying writer (e.g. to flush).
-func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }

@@ -20,6 +20,13 @@ service="${1:?usage: $0 <service> <image> <cluster>}"
 image="${2:?usage: $0 <service> <image> <cluster>}"
 cluster="${3:?usage: $0 <service> <image> <cluster>}"
 
+# The chart creates a ServiceMonitor, which only exists once the monitoring
+# stack has installed its CRDs. Fail early with the fix, not a Helm error.
+if ! kubectl --context "kind-${cluster}" get crd servicemonitors.monitoring.coreos.com >/dev/null 2>&1; then
+  echo "error: the monitoring stack isn't installed on kind-${cluster}. Run: make monitoring" >&2
+  exit 1
+fi
+
 repo="${image%:*}" # tiny-bank/hello:dev -> tiny-bank/hello
 layers="$(docker image inspect -f '{{json .RootFS.Layers}}' "$image")"
 hash="$(printf '%s' "$layers" | shasum -a 256)"

@@ -13,6 +13,8 @@ import (
 	"os/signal"
 	"sync/atomic"
 	"syscall"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 func main() {
@@ -43,5 +45,5 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	}
 
 	var ready atomic.Bool
-	return serve(ctx, ln, newHandler(logger, &ready), &ready, logger, cfg.ShutdownTimeout)
+	return serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry()), &ready, logger, cfg.ShutdownTimeout)
 }

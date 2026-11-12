@@ -1,0 +1,19 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Tells Prometheus to scrape this service's GET /metrics. The Prometheus
+# Operator (installed by `make monitoring`) watches ServiceMonitors and turns
+# them into scrape config, so a new service is monitored without touching
+# Prometheus itself. It finds the pods through the Service's labels.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http # the Service port name, scraped on every pod behind it
+      path: /metrics
+{{- end }}

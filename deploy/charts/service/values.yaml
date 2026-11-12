@@ -27,6 +27,11 @@ shutdownTimeoutSeconds: 10
 config:
   LOG_LEVEL: info
 
+# Create a ServiceMonitor so Prometheus scrapes GET /metrics. Needs the
+# monitoring stack's CRDs on the cluster (`make monitoring`, or `make dev`).
+serviceMonitor:
+  enabled: true
+
 resources:
   requests:
     cpu: 50m # 5% of one CPU: what the scheduler reserves

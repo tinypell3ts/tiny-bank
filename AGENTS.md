@@ -46,10 +46,12 @@ Current:
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
-├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, graceful shutdown
+├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, metrics, graceful shutdown
+├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
+│   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
     ├── architecture.md  # evolving architecture diagram
@@ -58,7 +60,7 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): `pkg/` (shared libraries such as `money`, `kit`, `terrors`), `services/<name>/`, `proto/`.
+Planned (added only when a phase needs them): more `pkg/` libraries (`money`, `kit`, `terrors`), `services/<name>/`, `proto/`.
 
 Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
@@ -74,14 +76,18 @@ make docker-smoke SERVICE=x   # same for cmd/x
 make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
-make deploy                   # build SERVICE (default hello) and helm-install exactly that build on the cluster
+make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
 make undeploy                 # helm-uninstall SERVICE
-make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
+make chart-check              # helm lint + kubeconform (incl. ServiceMonitor schema) for every deploy/values/*.yaml
+make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
+make monitoring-down          # remove the monitoring stack
+make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
+make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
-make dev-down                 # remove what Tilt deployed (cluster stays up)
+make dev-down                 # remove what Tilt deployed (cluster and monitoring stay up)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 3000 (Grafana) and 9090 (Prometheus) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
@@ -94,6 +100,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 - **Money is `int64` minor units plus an ISO 4217 currency code.** Never use floats for money, and never mix currencies silently.
 - **Config from environment variables** (12-factor). No config files baked into images.
 - **Logs are structured JSON to stdout** via `log/slog`. Never log secrets or full card or account numbers.
+- **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.
 - **Kubernetes-ready from day one:** expose `/healthz` (liveness) and `/readyz` (readiness), shut down gracefully on `SIGTERM`, and keep no local file state.
 - **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients.
 - **Tests:** table-driven where it fits. Standard library `testing` first.
