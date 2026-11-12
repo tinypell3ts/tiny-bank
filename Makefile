@@ -11,13 +11,17 @@ CHART   := deploy/charts/service
 MONITORING_CHART         := oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
 MONITORING_CHART_VERSION := 93.2.2
 
+# CloudNativePG operator: runs a Postgres cluster for each service that declares one.
+CNPG_CHART         := oci://ghcr.io/cloudnative-pg/charts/cloudnative-pg
+CNPG_CHART_VERSION := 0.29.1
+
 # kubeconform only knows built-in Kubernetes types. Schemas for custom ones
 # (like ServiceMonitor) come from the CRDs catalog, pinned to one commit so a
 # change upstream can't break or loosen our checks.
 CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdde38b5fecd0f8436ec5f3aa3679a3b86/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
 .PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -97,6 +101,14 @@ dashboards-check: ## Check every dashboard is valid JSON with a uid, a title and
 
 monitoring-down: ## Remove the monitoring stack (its CRDs stay, as Helm never deletes CRDs)
 	helm uninstall monitoring --kube-context $(KUBECTX) --namespace monitoring
+
+cnpg: ## Install or upgrade the CloudNativePG operator in "cnpg-system" (needs make monitoring; make dev does both)
+	helm upgrade --install cnpg $(CNPG_CHART) --version $(CNPG_CHART_VERSION) \
+		--kube-context $(KUBECTX) --namespace cnpg-system --create-namespace \
+		-f deploy/cnpg/values.yaml --wait --timeout 5m
+
+cnpg-down: ## Remove the CloudNativePG operator (its CRDs stay; delete databases first)
+	helm uninstall cnpg --kube-context $(KUBECTX) --namespace cnpg-system
 
 dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
 	tilt up --context $(KUBECTX)

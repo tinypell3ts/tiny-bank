@@ -1,0 +1,24 @@
+# CloudNativePG operator settings for the LOCAL kind cluster.
+# Installed by `make cnpg` (and by `make dev` through the Tiltfile).
+# The chart version is pinned in the Makefile (CNPG_CHART_VERSION).
+#
+# The operator only watches for `Cluster` objects and runs Postgres for them:
+# it creates the pods, the volumes, the users and their passwords, and handles
+# failover and upgrades. Each service's database is declared in the shared
+# service chart, not here.
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 100Mi
+  limits:
+    memory: 256Mi
+
+monitoring:
+  # Let Prometheus scrape the operator itself. Needs the monitoring stack's
+  # CRDs, which is why the monitoring stack is installed first.
+  podMonitorEnabled: true
+  # CloudNativePG's own Grafana dashboard for Postgres clusters. Grafana's
+  # sidecar picks it up from any namespace.
+  grafanaDashboard:
+    create: true

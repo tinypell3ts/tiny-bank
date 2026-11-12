@@ -52,6 +52,7 @@ Current:
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
+│   ├── cnpg/            # CloudNativePG operator values (Postgres for services)
 │   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
@@ -82,10 +83,12 @@ make undeploy                 # helm-uninstall SERVICE
 make chart-check              # helm lint + kubeconform (incl. ServiceMonitor schema) for every deploy/values/*.yaml
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
+make cnpg                     # install or upgrade the CloudNativePG operator in "cnpg-system" (make dev does this)
+make cnpg-down                # remove the operator (CRDs and databases stay)
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
-make dev-down                 # remove what Tilt deployed (cluster and monitoring stay up)
+make dev-down                 # remove what Tilt deployed (cluster, monitoring and CloudNativePG stay up)
 ```
 
 Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 3000 (Grafana) and 9090 (Prometheus) are taken.

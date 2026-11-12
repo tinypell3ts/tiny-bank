@@ -8,6 +8,7 @@ Rules for everything under `deploy/`. The root [AGENTS.md](../AGENTS.md) still a
 deploy/
 ├── kind/cluster.yaml     # local cluster: one node, name set by CLUSTER in the Makefile
 ├── charts/service/       # THE chart, shared by every service
+├── cnpg/values.yaml       # CloudNativePG operator settings (runs Postgres for services)
 ├── monitoring/values.yaml # kube-prometheus-stack settings for the local cluster
 ├── monitoring/dashboards/ # Grafana dashboards as JSON, loaded by `make dashboards`
 └── values/<service>.yaml # per-service settings, kept as small as possible
@@ -23,7 +24,9 @@ deploy/
 - **Liveness never checks dependencies.** `/healthz` reports only "the process is alive". Database or Kafka checks belong in `/readyz`, otherwise a dependency blip restarts every pod at once.
 - **Keep shutdown timings consistent.** `terminationGracePeriodSeconds` is computed as `preStopSleepSeconds + shutdownTimeoutSeconds + 5`. Change those two values, never the grace period directly. The app reads `SHUTDOWN_TIMEOUT` from the same value.
 - **Memory limit, no CPU limit.** Set memory requests and limits, and CPU requests only. CPU limits throttle the app even on an idle node.
-- **Third-party charts are pinned.** The monitoring chart's version lives in the Makefile (`MONITORING_CHART_VERSION`). Bump it on purpose, run `make monitoring`, and check Grafana and Prometheus targets before committing.
+- **Third-party charts are pinned.** Their versions live in the Makefile (`MONITORING_CHART_VERSION`, `CNPG_CHART_VERSION`). Bump one on purpose, run its target (`make monitoring`, `make cnpg`), and check it works before committing: Grafana and Prometheus targets for monitoring, a database becoming ready for CloudNativePG.
+- **Install order: monitoring, then CloudNativePG, then services.** Each one needs CRDs from the one before. Tilt follows this order with `resource_deps`.
+- **Never delete CloudNativePG's CRDs.** Deleting the `clusters.postgresql.cnpg.io` CRD deletes every database with it. The chart keeps its CRDs on `helm uninstall` (`make cnpg-down` only removes the operator), so leave it that way.
 - **`deploy/monitoring/values.yaml` is local-only.** Grafana has no login and everyone is admin. Never reuse it for a shared cluster.
 - **Every service is scraped.** The chart creates a `ServiceMonitor` for each service, so Prometheus scrapes `GET /metrics` on the `http` port without extra setup. That needs the monitoring stack's CRDs, so the monitoring stack is installed first: Tilt waits for it, and `scripts/deploy.sh` stops with "Run: make monitoring" if it's missing.
 - **Dashboards live in git.** Grafana dashboards are JSON files in `monitoring/dashboards/`, each with a fixed `uid`. Changes made in the Grafana UI are lost when its pod restarts, so build in the UI, then use *Export → Export as JSON* and save over the file. Panels about service traffic filter out probes and scrapes with `http_route!~"/healthz|/readyz|/metrics"`.

@@ -54,6 +54,18 @@ local_resource(
     labels=['monitoring'],
 )
 
+# --- Postgres: the CloudNativePG operator ---
+# Same pattern as monitoring: plain Helm through `make cnpg`, rerun only when
+# its values change, left running by `tilt down`. It waits for monitoring
+# because it creates a PodMonitor, which needs the monitoring stack's CRDs.
+local_resource(
+    'cnpg',
+    cmd='make cnpg',
+    deps=['deploy/cnpg/values.yaml'],
+    resource_deps=['monitoring'],
+    labels=['postgres'],
+)
+
 def forward(name, service, port, target):
     """Forward localhost:<port> to a service in the monitoring namespace."""
     local_resource(
