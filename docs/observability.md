@@ -34,3 +34,23 @@ A bank must be able to answer **"what happened to this customer's money, and why
 - **Request ID:** taken from the caller's `X-Request-Id` if it is 1–64 characters of `[A-Za-z0-9_-]`, otherwise generated. It is echoed back in the response header.
 - **Log level:** `LOG_LEVEL` = `debug`, `info` (default), `warn` or `error`.
 - **Health:** `/healthz` returns 200 while the process is alive. `/readyz` returns 200 while serving and 503 once shutdown begins.
+- **Metrics:** `GET /metrics` serves Prometheus text format, built by `pkg/obs`:
+
+  | Metric | Type | Labels | Answers |
+  |---|---|---|---|
+  | `http_server_request_duration_seconds` | histogram | `http_request_method`, `http_route`, `http_response_status_code` | All of RED: how many requests (`_count`), how many failed (status `5..`), how long they take (p50, p95, p99), including how long the failures took |
+  | `http_server_active_requests` | gauge | none | How busy is it right now? |
+  | `go_*`, `process_*` | various | none | Goroutines, memory, GC, CPU, open files |
+
+  One histogram covers rate, errors and duration, because every histogram already counts its observations. A separate request counter would double the series for no extra answers. Metric and label names follow the [OpenTelemetry HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/), so dashboards and queries keep working when OpenTelemetry arrives in Phase 8.
+
+  `http_route` is the matched route pattern (`/accounts/{id}`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`.
+
+  Example PromQL queries, once Prometheus is running later in Phase 2:
+
+  ```promql
+  sum by (http_route) (rate(http_server_request_duration_seconds_count[5m]))            # rate
+  sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+    / sum(rate(http_server_request_duration_seconds_count[5m]))                         # error ratio
+  histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))  # p95 latency
+  ```

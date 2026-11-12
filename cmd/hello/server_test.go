@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 func TestHandlerRoutes(t *testing.T) {
@@ -32,13 +34,14 @@ func TestHandlerRoutes(t *testing.T) {
 		{"readyz when not ready", http.MethodGet, "/readyz", false, http.StatusServiceUnavailable, `"status":"not ready"`},
 		{"wrong method", http.MethodPost, "/healthz", true, http.StatusMethodNotAllowed, ""},
 		{"unknown path", http.MethodGet, "/nope", true, http.StatusNotFound, ""},
+		{"metrics", http.MethodGet, "/metrics", true, http.StatusOK, "go_goroutines"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var ready atomic.Bool
 			ready.Store(tt.ready)
-			h := newHandler(slog.New(slog.DiscardHandler), &ready)
+			h := newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry())
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), tt.method, tt.path, nil))
@@ -70,7 +73,7 @@ func TestRequestIDAndAccessLog(t *testing.T) {
 			var logs bytes.Buffer
 			var ready atomic.Bool
 			ready.Store(true)
-			h := newHandler(slog.New(slog.NewJSONHandler(&logs, nil)), &ready)
+			h := newHandler(slog.New(slog.NewJSONHandler(&logs, nil)), &ready, obs.NewRegistry())
 
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil)
 			if tt.incoming != "" {
@@ -112,7 +115,7 @@ func TestServeShutsDownIdleServer(t *testing.T) {
 	var ready atomic.Bool
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	serveErr := startServe(ctx, ln, newHandler(slog.New(slog.DiscardHandler), &ready), &ready, 5*time.Second)
+	serveErr := startServe(ctx, ln, newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry()), &ready, 5*time.Second)
 
 	// While running, the server is ready.
 	if status, err := doGet(t.Context(), url); err != nil || status != http.StatusOK {
@@ -252,4 +255,33 @@ func doGet(ctx context.Context, url string) (int, error) {
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode, nil
+}
+
+// TestMetricsCountRequests checks the middleware is wired in: requests through
+// the real handler show up on /metrics, labelled by route, not raw path.
+func TestMetricsCountRequests(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(true)
+	h := newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry())
+
+	for _, path := range []string{"/", "/", "/healthz", "/does-not-exist"} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+
+	for _, want := range []string{
+		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="200",http_route="/{$}"} 2`,
+		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="200",http_route="/healthz"} 1`,
+		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="404",http_route="unmatched"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics missing %q", want)
+		}
+	}
+	if strings.Contains(body, "does-not-exist") {
+		t.Error("/metrics must not contain raw request paths")
+	}
 }

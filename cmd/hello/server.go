@@ -11,6 +11,10 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // serve runs h on ln until ctx is cancelled, then shuts down gracefully:
@@ -56,14 +60,19 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler, ready *atomic.B
 	return nil
 }
 
-// newHandler wires routes and middleware. Request ID runs first so the access log can include it.
-func newHandler(logger *slog.Logger, ready *atomic.Bool) http.Handler {
+// newHandler wires routes and middleware, outermost first:
+//   - request ID, so everything after it can use the ID
+//   - access log, one line per request
+//   - metrics, directly around the mux so it can read the matched route
+func newHandler(logger *slog.Logger, ready *atomic.Bool, reg *prometheus.Registry) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleHello)
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /readyz", handleReadyz(ready))
+	mux.Handle("GET /metrics", obs.Handler(reg)) // scraped by Prometheus
 
-	return withRequestID(withAccessLog(logger, mux))
+	metrics := obs.NewHTTPMetrics(reg)
+	return withRequestID(withAccessLog(logger, metrics.Middleware(mux)))
 }
 
 func handleHello(w http.ResponseWriter, _ *http.Request) {
