@@ -16,7 +16,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 |-------|------|
 | 0 | JSON logs, `/healthz` + `/readyz` |
 | 1 | Kubernetes liveness/readiness probes using those endpoints, logs via `kubectl logs` and the Tilt dashboard ✅ |
-| 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard (in progress) |
+| 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard ✅ |
 | 6 | Request ID in gRPC metadata, logging/metrics interceptors |
 | 7 | Ledger audit trail and business metrics |
 | 8 | OpenTelemetry tracing across services |
@@ -24,6 +24,8 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 13 | Dashboards and alert rules |
 
 ## Current
+
+Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-services-with-prometheus-red-metrics.md).
 
 `cmd/hello` writes JSON logs to stdout. Every line has `time`, `level`, `msg` and `service`. Every request produces one `http request` line:
 
