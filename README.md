@@ -52,6 +52,7 @@ Without Tilt, for a one-off deploy:
 
 ```bash
 make cluster-up
+make monitoring     # once: the chart's ServiceMonitor needs its CRDs
 make deploy
 kubectl --context kind-tiny-bank port-forward svc/hello 8080:80
 ```

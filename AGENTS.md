@@ -76,9 +76,9 @@ make docker-smoke SERVICE=x   # same for cmd/x
 make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
-make deploy                   # build SERVICE (default hello) and helm-install exactly that build on the cluster
+make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
 make undeploy                 # helm-uninstall SERVICE
-make chart-check              # helm lint + kubeconform for every deploy/values/*.yaml (brew install kubeconform)
+make chart-check              # helm lint + kubeconform (incl. ServiceMonitor schema) for every deploy/values/*.yaml
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save

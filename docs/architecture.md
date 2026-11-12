@@ -34,9 +34,11 @@ flowchart LR
     tilt -->|helm chart: deploy/charts/service| k8s
     subgraph k8s [kind cluster: kind-tiny-bank]
         svc[Service hello] --> pod[Pod hello<br/>probes /healthz, /readyz<br/>/metrics]
+        sm[ServiceMonitor hello] -.selects.-> svc
         subgraph mon [namespace: monitoring]
             prom[Prometheus] --> graf[Grafana]
         end
+        prom -->|scrapes /metrics every 30s| pod
     end
     tilt -->|make monitoring: kube-prometheus-stack| mon
     dev -->|localhost:8080 port-forward| pod
@@ -45,7 +47,7 @@ flowchart LR
 
 - **Image:** one shared `Dockerfile`, multi-stage, distroless and non-root.
 - **Cluster:** one-node kind cluster (`make cluster-up`).
-- **Deploy:** one shared Helm chart plus `deploy/values/hello.yaml`.
+- **Deploy:** one shared Helm chart plus `deploy/values/hello.yaml`. The chart also creates a `ServiceMonitor`, so Prometheus scrapes every service.
 - **Dev loop:** Tilt rebuilds and redeploys on save.
 - **Monitoring:** kube-prometheus-stack (Prometheus Operator, Prometheus, Grafana, kube-state-metrics) in the `monitoring` namespace, installed by `make monitoring`. See [observability.md](observability.md).
 

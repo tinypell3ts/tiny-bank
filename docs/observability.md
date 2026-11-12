@@ -46,7 +46,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 
   `http_route` is the matched route pattern (`/accounts/{id}`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`. Methods outside the standard set (`GET`, `POST`, …) are labelled `_OTHER`, so a caller can't create new series by inventing methods. The status code is the final one the client received: informational `1xx` responses and ignored second `WriteHeader` calls don't count.
 
-  Example PromQL queries, for Prometheus at localhost:9090 once it scrapes the service (the next Phase 2 step adds that):
+  Example PromQL queries, for Prometheus at localhost:9090 (add `job="hello"` to pick one service):
 
   ```promql
   sum by (http_route) (rate(http_server_request_duration_seconds_count[5m]))            # rate
@@ -71,5 +71,5 @@ Turned off for a one-node dev cluster:
 - node-exporter, because host metrics for the Docker VM aren't useful.
 - Scraping etcd, the scheduler, the controller manager and kube-proxy, which kind doesn't expose.
 
-Prometheus picks up every `ServiceMonitor` in the cluster, not only ones from this Helm release, so services can bring their own.
+Prometheus picks up every `ServiceMonitor` in the cluster, not only ones from this Helm release, so services can bring their own. The shared chart creates one per service ([servicemonitor.yaml](../deploy/charts/service/templates/servicemonitor.yaml)), so every service is scraped on its `http` port at `/metrics`. Each series gets `job` (the service name), `namespace` and `pod` labels. Check it in Prometheus under *Status → Targets*.
 

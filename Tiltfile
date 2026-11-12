@@ -27,7 +27,8 @@ def go_service(name, port):
         name=name,
         values=['deploy/values/%s.yaml' % name],
     ))
-    k8s_resource(name, port_forwards='%d:8080' % port, labels=['services'])
+    # Wait for the monitoring stack: the chart's ServiceMonitor needs its CRD.
+    k8s_resource(name, port_forwards='%d:8080' % port, resource_deps=['monitoring'], labels=['services'])
 
 # One line per service. Each gets its own localhost port.
 go_service('hello', port=8080)

@@ -11,6 +11,11 @@ CHART   := deploy/charts/service
 MONITORING_CHART         := oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
 MONITORING_CHART_VERSION := 93.2.2
 
+# kubeconform only knows built-in Kubernetes types. Schemas for custom ones
+# (like ServiceMonitor) come from the CRDs catalog, pinned to one commit so a
+# change upstream can't break or loosen our checks.
+CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdde38b5fecd0f8436ec5f3aa3679a3b86/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+
 .PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
 	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dev dev-down
 
@@ -60,7 +65,8 @@ chart-check: ## Lint the chart and validate its output for every service (brew i
 	@for v in deploy/values/*.yaml; do \
 		echo "--- $$v"; \
 		helm lint $(CHART) -f $$v --strict || exit 1; \
-		helm template $$(basename $$v .yaml) $(CHART) -f $$v | kubeconform -strict -summary || exit 1; \
+		helm template $$(basename $$v .yaml) $(CHART) -f $$v | kubeconform -strict -summary \
+			-schema-location default -schema-location '$(CRD_SCHEMAS)' || exit 1; \
 	done
 
 deploy: docker-build ## Build IMAGE and deploy exactly that build of SERVICE to the kind cluster
