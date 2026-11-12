@@ -37,7 +37,7 @@ The package only has what's needed now: add, subtract and currency checks. Compa
 
 ## Consequences
 
-- Every money bug of the kinds above becomes either a compile error or an error value the caller must handle. Go doesn't let the second return value be ignored silently, and lint flags unchecked errors.
+- Every money bug of the kinds above becomes either a compile error or an error value. **Callers must check that error before using the result.** This is a rule we follow, not something Go enforces. Lint (`errcheck`) catches a call whose error is ignored completely, like `a.Add(b)` on its own line. But Go allows `sum, _ := a.Add(b)`, and our lint settings don't flag errors assigned to `_`. Code review must catch that. On error the result is the zero `Money`, which has no currency, so any later `Add` or `Sub` with it fails instead of quietly producing a number.
 - Code is a little longer: `a.Add(b)` returns `(Money, error)`, not just a number, so each step needs `if err != nil`.
 - Amounts with fractions of a minor unit, such as interest calculated to a fraction of a penny, can't be represented directly. When interest arrives, we'll add an explicit rounding step with a recorded rule.
 - Adding a currency means adding one function and one map entry, with its correct minor-unit digits.

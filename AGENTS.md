@@ -98,7 +98,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 
 ## Conventions
 
-- **Money is `int64` minor units plus an ISO 4217 currency code**, always as `money.Money` from `pkg/money` ([ADR-0004](docs/adr/0004-represent-money-as-int64-minor-units.md)). Never use floats for money, never mix currencies silently, and always handle the error from `Add`/`Sub`.
+- **Money is `int64` minor units plus an ISO 4217 currency code**, always as `money.Money` from `pkg/money` ([ADR-0004](docs/adr/0004-represent-money-as-int64-minor-units.md)). Never use floats for money, never mix currencies silently, and always handle the error from `Add`/`Sub`. Never discard it with `_`: lint doesn't catch that, so reviewers must.
 - **Config from environment variables** (12-factor). No config files baked into images.
 - **Logs are structured JSON to stdout** via `log/slog`. Never log secrets or full card or account numbers.
 - **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.
