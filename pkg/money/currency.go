@@ -12,7 +12,7 @@ var ErrInvalidCurrency = errors.New("invalid currency")
 // Currency is an ISO 4217 currency, such as GBP.
 //
 // Its fields are unexported, so the only way to get one is ParseCurrency or the
-// variables below. A typo like "GPB" fails when it is parsed instead of
+// functions below. A typo like "GPB" fails when it is parsed instead of
 // turning into a new currency. The zero value Currency{} is invalid.
 type Currency struct {
 	code     string
@@ -20,18 +20,21 @@ type Currency struct {
 }
 
 // Supported currencies. Add one here only when tiny-bank needs it.
-var (
-	GBP = Currency{code: "GBP", exponent: 2}
-	EUR = Currency{code: "EUR", exponent: 2}
-	USD = Currency{code: "USD", exponent: 2}
-	JPY = Currency{code: "JPY", exponent: 0} // the yen has no minor unit
-)
+//
+// They're functions, not exported variables, because Go has no struct
+// constants: any package could reassign a variable (money.GBP = money.EUR)
+// and silently turn every later "GBP" amount into euros.
+func GBP() Currency { return Currency{code: "GBP", exponent: 2} }
+func EUR() Currency { return Currency{code: "EUR", exponent: 2} }
+func USD() Currency { return Currency{code: "USD", exponent: 2} }
+func JPY() Currency { return Currency{code: "JPY", exponent: 0} } // the yen has no minor unit
 
+// currencies is unexported, so only this package can read or change it.
 var currencies = map[string]Currency{
-	GBP.code: GBP,
-	EUR.code: EUR,
-	USD.code: USD,
-	JPY.code: JPY,
+	"GBP": GBP(),
+	"EUR": EUR(),
+	"USD": USD(),
+	"JPY": JPY(),
 }
 
 // ParseCurrency returns the supported currency for an ISO 4217 code. The code

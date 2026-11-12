@@ -32,7 +32,7 @@ type Money struct {
 	currency Currency
 }
 
-// New returns an amount of minor units in currency c. money.New(1050, money.GBP)
+// New returns an amount of minor units in currency c. money.New(1050, money.GBP())
 // is £10.50.
 func New(minor int64, c Currency) Money {
 	return Money{amount: minor, currency: c}
