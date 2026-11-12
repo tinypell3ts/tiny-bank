@@ -18,7 +18,7 @@ Prerequisites:
 
 - Go 1.27+
 - [golangci-lint](https://golangci-lint.run) v2 (`brew install golangci-lint`)
-- Docker Desktop (give it 8–12 GB RAM once the cluster arrives in Phase 1)
+- Docker Desktop (give it 8–12 GB RAM once the cluster arrives in Phase 1). `make test-integration` also uses it to start a throwaway Postgres.
 
 ```bash
 make hooks   # once: blocks pushing badly named branches

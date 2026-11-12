@@ -48,6 +48,7 @@ Current:
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, metrics, graceful shutdown
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
+├── pkg/db/              # Postgres: Open a pgx connection pool from DATABASE_URL (+ integration tests)
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
 ├── deploy/
 │   ├── kind/            # local kind cluster config
@@ -72,6 +73,7 @@ Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and de
 make             # list targets
 make fmt         # format code
 make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts
+make test-integration # integration tests against real Postgres in Docker (CI runs these too)
 make hooks       # once per clone: enable the pre-push branch-name check
 make docker-smoke             # build the hello image and smoke-test it
 make docker-smoke SERVICE=x   # same for cmd/x
@@ -107,7 +109,8 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 - **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.
 - **Kubernetes-ready from day one:** expose `/healthz` (liveness) and `/readyz` (readiness), shut down gracefully on `SIGTERM`, and keep no local file state.
 - **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients.
-- **Tests:** table-driven where it fits. Standard library `testing` first.
+- **Tests:** table-driven where it fits. Standard library `testing` first. Tests that need a real dependency (Postgres) go in `*_integration_test.go` files tagged `//go:build integration`, and start it with testcontainers. `make check` skips them; `make test-integration` and CI run them.
+- **Databases:** connect with `db.Open` from `pkg/db`, using `DATABASE_URL` from the environment. Never build connection strings by hand, and never log `DATABASE_URL` itself (errors from `db.Open` are safe to log).
 - **One Go module** for the monorepo, so every service always builds against the latest shared code.
 - **Bump Go in three places together:** `go.mod`, `GO_VERSION` in the `Dockerfile`, and the golangci-lint version in CI, which must be built with a Go version at least as new.
 - **Images** are distroless and run as non-root. Never add a shell or package manager to the runtime stage.

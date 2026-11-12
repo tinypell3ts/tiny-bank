@@ -20,7 +20,7 @@ CNPG_CHART_VERSION := 0.29.1
 # change upstream can't break or loosen our checks.
 CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdde38b5fecd0f8436ec5f3aa3679a3b86/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
-.PHONY: help fmt fmt-check vet lint test test-scripts check hooks docker-build docker-smoke \
+.PHONY: help fmt fmt-check vet lint test test-integration test-scripts check hooks docker-build docker-smoke \
 	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down dev dev-down
 
 help: ## List targets
@@ -32,14 +32,19 @@ fmt: ## Format all Go code in place
 fmt-check: ## Fail if any Go file is not gofmt-formatted
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "needs gofmt:"; echo "$$out"; exit 1; fi
 
-vet: ## Run go vet
-	go vet ./...
+vet: ## Run go vet (including integration test files)
+	go vet -tags=integration ./...
 
 lint: ## Run golangci-lint (brew install golangci-lint)
 	golangci-lint run ./...
 
 test: ## Run unit tests with the race detector and coverage
 	go test -race -cover ./...
+
+# Files tagged //go:build integration start real dependencies (Postgres) in
+# Docker with testcontainers, so they're slower and need Docker running.
+test-integration: ## Run integration tests against real Postgres in Docker (needs Docker)
+	go test -race -cover -tags=integration ./...
 
 test-scripts: ## Test the shell scripts in scripts/
 	scripts/check-branch-name_test.sh
