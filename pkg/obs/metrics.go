@@ -65,24 +65,33 @@ func NewHTTPMetrics(reg prometheus.Registerer) *HTTPMetrics {
 	return m
 }
 
-// Middleware records metrics for every request handled by next.
+// Track starts recording one request and returns a function to call when it
+// ends, with its method, route pattern and status. Transports that don't use
+// http.ServeMux (Typhon, in pkg/kit) record through it; Middleware uses it too.
 //
-// next must be (or wrap) an http.ServeMux: the route label is the mux pattern
-// that matched, like "/accounts/{id}", never the raw URL path. Raw paths
-// would create one time series per account ID and overload Prometheus
-// ("cardinality explosion"). Requests that match no route are labelled "unmatched".
+// route must be the pattern that matched, like "/accounts/:id", never the raw
+// URL path. Raw paths would create one time series per account ID and
+// overload Prometheus ("cardinality explosion"). An empty route means the
+// request matched nothing and is labelled "unmatched".
+func (m *HTTPMetrics) Track() (done func(method, route string, status int)) {
+	m.active.Inc()
+	start := time.Now()
+	return func(method, route string, status int) {
+		m.active.Dec()
+		m.duration.WithLabelValues(methodOf(method), routeOf(route), strconv.Itoa(status)).
+			Observe(time.Since(start).Seconds())
+	}
+}
+
+// Middleware records metrics for every request handled by next, which must
+// be (or wrap) an http.ServeMux: the route label is the mux pattern that matched.
 func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m.active.Inc()
-		defer m.active.Dec()
-
-		start := time.Now()
+		done := m.Track()
 		rec := NewStatusRecorder(w)
 		next.ServeHTTP(rec, r)
-
 		// The mux sets r.Pattern on this same request while routing it.
-		m.duration.WithLabelValues(methodOf(r.Method), routeOf(r.Pattern), strconv.Itoa(rec.Status())).
-			Observe(time.Since(start).Seconds())
+		done(r.Method, r.Pattern, rec.Status())
 	})
 }
 

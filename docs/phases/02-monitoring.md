@@ -55,7 +55,7 @@ Open [localhost:9090/targets](http://localhost:9090/targets): `hello` is listed 
 for i in $(seq 1 100); do curl -s -o /dev/null localhost:8080/; sleep 0.2; done
 ```
 
-Open [localhost:3000/d/tiny-bank-services](http://localhost:3000/d/tiny-bank-services). Within a minute, requests per second rise for `hello GET /{$}`, and the error ratio stays at 0%. When you're done:
+Open [localhost:3000/d/tiny-bank-services](http://localhost:3000/d/tiny-bank-services). Within a minute, requests per second rise for `hello GET /`, and the error ratio stays at 0%. When you're done:
 
 ```bash
 make dev-down

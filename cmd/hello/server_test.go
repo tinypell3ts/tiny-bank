@@ -25,7 +25,7 @@ func TestHandlerRoutes(t *testing.T) {
 		{"healthz ok even when not ready", http.MethodGet, "/healthz", false, http.StatusOK, `"status":"ok"`},
 		{"readyz when ready", http.MethodGet, "/readyz", true, http.StatusOK, `"status":"ok"`},
 		{"readyz when not ready", http.MethodGet, "/readyz", false, http.StatusServiceUnavailable, `"status":"not ready"`},
-		{"wrong method", http.MethodPost, "/healthz", true, http.StatusMethodNotAllowed, ""},
+		{"wrong method", http.MethodPost, "/healthz", true, http.StatusNotFound, ""}, // Typhon's router answers 404, not 405
 		{"unknown path", http.MethodGet, "/nope", true, http.StatusNotFound, ""},
 		{"metrics", http.MethodGet, "/metrics", true, http.StatusOK, "go_goroutines"},
 	}
@@ -65,7 +65,7 @@ func TestMetricsCountRequests(t *testing.T) {
 	body := rec.Body.String()
 
 	for _, want := range []string{
-		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="200",http_route="/{$}"} 2`,
+		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="200",http_route="/"} 2`,
 		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="200",http_route="/healthz"} 1`,
 		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="404",http_route="unmatched"} 1`,
 	} {
