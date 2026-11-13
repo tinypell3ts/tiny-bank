@@ -8,7 +8,7 @@ A small core banking platform built from **Go microservices, Postgres, Kafka and
 
 Customers open accounts, deposit money and transfer it to each other. Every movement of money is recorded in a double-entry ledger, and customers see a feed of what happened.
 
-The work is split across small services (account, ledger, transaction, notification and an edge gateway) that talk over gRPC. Each service has its own Postgres database, and events flow through Kafka. Everything runs in Docker on a local Kubernetes cluster.
+The work is split across small services (account, ledger, transaction, notification and an edge gateway) that call each other over HTTP using [Typhon](https://github.com/monzo/typhon), with protobuf contracts. Each service has its own Postgres database, and events flow through Kafka. Everything runs in Docker on a local Kubernetes cluster.
 
 See [docs/architecture.md](docs/architecture.md) for the full picture.
 

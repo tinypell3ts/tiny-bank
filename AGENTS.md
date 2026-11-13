@@ -67,7 +67,7 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `pkg/terrors`, Typhon-style filters in `pkg/kit`, and `proto/`.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `pkg/kit` on [Typhon](https://github.com/monzo/typhon) with [terrors](https://github.com/monzo/terrors) errors ([ADR-0007](docs/adr/0007-build-services-on-typhon-and-terrors.md)), and `proto/`.
 
 Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
@@ -114,6 +114,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 - **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.
 - **Kubernetes-ready from day one:** expose `/healthz` (liveness) and `/readyz` (readiness), shut down gracefully on `SIGTERM`, and keep no local file state.
 - **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients.
+- **terrors travel between services.** Typhon sends an error's code, message and params to the calling service ([ADR-0007](docs/adr/0007-build-services-on-typhon-and-terrors.md)). Never put secrets, passwords, tokens or personal details (names, emails, full account numbers) in a terror's message or params.
 - **Tests:** table-driven where it fits. Standard library `testing` first. Tests that need a real dependency (Postgres) go in `*_integration_test.go` files tagged `//go:build integration`, and start it with testcontainers. `make check` skips them; `make test-integration` and CI run them.
 - **Databases:** connect with `db.Open` from `pkg/db`, using `DATABASE_URL` from the environment. Never build connection strings by hand, and never log `DATABASE_URL` itself (errors from `db.Open` are safe to log).
 - **Migrations** are goose SQL files (`<version>_<name>.sql`) embedded in the service and applied at startup with `db.Migrate`, before the service reports ready ([ADR-0005](docs/adr/0005-run-migrations-at-startup-behind-an-advisory-lock.md)). Every migration must work with the code that is already running (expand, then contract). Never edit a migration that has been applied anywhere; fix forward with a new one.

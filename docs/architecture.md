@@ -7,11 +7,11 @@ This page grows with the project. The **target** shows where we're heading. **Cu
 ```mermaid
 flowchart LR
     client([Client]) -->|REST via ingress| gw[edge-gateway]
-    gw -->|gRPC| customer
-    customer -->|gRPC: open first account| account
-    gw -->|gRPC| account
-    gw -->|gRPC| txn[transaction]
-    txn -->|gRPC| ledger
+    gw -->|Typhon| customer
+    customer -->|Typhon: open first account| account
+    gw -->|Typhon| account
+    gw -->|Typhon| txn[transaction]
+    txn -->|Typhon| ledger
     account & ledger & txn -->|outbox| kafka[(Kafka)]
     kafka --> notif[notification]
     customer --- cdb[(Postgres)]
@@ -21,6 +21,7 @@ flowchart LR
     notif --- ndb[(Postgres)]
 ```
 
+- **Services:** Go, built on [Typhon](https://github.com/monzo/typhon), an RPC framework that wraps `net/http`, with errors as [terrors](https://github.com/monzo/terrors). Services call each other over HTTP with protobuf contracts ([ADR-0007](adr/0007-build-services-on-typhon-and-terrors.md)).
 - **Runtime:** Docker on Kubernetes (kind locally). Services are deployed with one generic Helm chart, and Tilt runs the dev loop.
 - **Data:** one Postgres database per service, managed by CloudNativePG. Services never read another service's database.
 - **Events:** services publish through a transactional outbox to Kafka (Strimzi). Consumers deduplicate with an inbox table.
