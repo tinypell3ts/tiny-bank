@@ -211,3 +211,27 @@ func TestRouteOf(t *testing.T) {
 		}
 	}
 }
+
+func TestMiddlewareCountsAPanicAndEndsIt(t *testing.T) {
+	reg := NewRegistry()
+	m := NewHTTPMetrics(reg)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /boom", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	h := m.Middleware(mux)
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic should still reach the caller (net/http handles it)")
+			}
+		}()
+		do(t, h, http.MethodGet, "/boom")
+	}()
+
+	if got := testutil.ToFloat64(m.active); got != 0 {
+		t.Errorf("active = %v after a panicking request, want 0", got)
+	}
+	if got := sampleCount(t, m.duration.WithLabelValues("GET", "/boom", "500")); got != 1 {
+		t.Errorf("panicking request recorded %v times as 500, want 1", got)
+	}
+}

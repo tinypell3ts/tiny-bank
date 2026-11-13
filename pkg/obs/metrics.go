@@ -89,9 +89,18 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		done := m.Track()
 		rec := NewStatusRecorder(w)
+		// Deferred, so a panicking handler still ends its request in the metrics
+		// (as a 500) and the active-requests gauge comes back down. The panic is
+		// re-raised for net/http to handle as before.
+		defer func() {
+			if p := recover(); p != nil {
+				done(r.Method, r.Pattern, http.StatusInternalServerError)
+				panic(p)
+			}
+			// The mux sets r.Pattern on this same request while routing it.
+			done(r.Method, r.Pattern, rec.Status())
+		}()
 		next.ServeHTTP(rec, r)
-		// The mux sets r.Pattern on this same request while routing it.
-		done(r.Method, r.Pattern, rec.Status())
 	})
 }
 

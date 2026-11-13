@@ -34,7 +34,7 @@ func testServer(t *testing.T) (http.Handler, *bytes.Buffer) {
 		return typhon.Response{Error: fmt.Errorf("get thing: %w", terrors.BadRequest("bad_id", "id must be a number", nil))}
 	})
 	router.GET("/raw", func(req typhon.Request) typhon.Response {
-		return typhon.Response{Error: errors.New("pq: connection to 10.0.0.7 failed: password=s3cret")}
+		return typhon.Response{Error: errors.New("pq: connection to 10.0.0.7 failed: relation accounts_tmp does not exist")}
 	})
 	router.GET("/internal", func(req typhon.Request) typhon.Response {
 		return typhon.Response{Error: terrors.InternalService("db", "database unavailable", nil)}
@@ -101,7 +101,7 @@ func TestErrorsReachTheCallerSafely(t *testing.T) {
 				t.Errorf("message = %v, want %q", body["message"], tt.wantMessage)
 			}
 			// Nothing internal ever reaches the caller.
-			for _, leak := range []string{"stack", "filename", "s3cret", "10.0.0.7", "boom", "get thing:", "/Users/"} {
+			for _, leak := range []string{"stack", "filename", "accounts_tmp", "10.0.0.7", "boom", "get thing:", "/Users/"} {
 				if strings.Contains(rec.Body.String(), leak) {
 					t.Errorf("response leaks %q: %s", leak, rec.Body)
 				}
@@ -112,7 +112,7 @@ func TestErrorsReachTheCallerSafely(t *testing.T) {
 
 func TestInternalErrorsAreLogged(t *testing.T) {
 	for path, want := range map[string]string{
-		"/raw":      "password=s3cret", // the full raw error goes to the logs
+		"/raw":      "relation accounts_tmp does not exist", // the full raw error goes to the logs
 		"/internal": "database unavailable",
 		"/panic":    "boom: secret detail",
 	} {

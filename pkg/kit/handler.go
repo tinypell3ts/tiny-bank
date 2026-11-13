@@ -113,6 +113,12 @@ func metricsFilter(m *obs.HTTPMetrics) typhon.Filter {
 //   - logs any error that isn't a terror (a raw database error, say) with the
 //     request ID, and sends a generic internal error instead
 //   - logs every internal_service error, so a 500 can be traced from logs
+//
+// The full error is logged because it's the only record of why a request
+// failed, and this filter can't tell which parts of an arbitrary error are
+// secret. So errors must never contain secrets in the first place (AGENTS.md):
+// pgx already hides passwords, and code must never put tokens or personal
+// details into an error.
 func cleanErrors(logger *slog.Logger) typhon.Filter {
 	return func(req typhon.Request, next typhon.Service) typhon.Response {
 		rsp := next(req)
