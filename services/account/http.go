@@ -40,7 +40,7 @@ const maxBodyBytes = 16 << 10
 // call it directly. Onboarding (Phase 11.5) creates the customer first, then
 // opens their first account here. The customer-facing endpoint at the edge
 // gateway (Phase 12) takes the customer ID from the signed-in caller's token,
-// never from the request body.
+// never from the request body. See ADR-0006.
 //
 // There is no authentication yet: any caller can open an account for any
 // customer and read any account by ID. The service must stay internal
