@@ -47,7 +47,7 @@ func TestHandlerRoutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var ready atomic.Bool
 			ready.Store(tt.ready)
-			h := newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry(), tt.db)
+			h := newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry(), tt.db, nil)
 
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, nil))
@@ -68,7 +68,7 @@ func TestHandlerRoutes(t *testing.T) {
 func TestReadyzGivesUpOnASlowDatabase(t *testing.T) {
 	var ready atomic.Bool
 	ready.Store(true)
-	h := newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry(), slowDB{})
+	h := newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry(), slowDB{}, nil)
 
 	start := time.Now()
 	rec := httptest.NewRecorder()

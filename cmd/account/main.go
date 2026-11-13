@@ -68,7 +68,7 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	}
 
 	var ready atomic.Bool
-	return kit.Serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry(), pool), &ready, logger, cfg.ShutdownTimeout)
+	return kit.Serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry(), pool, account.NewStore(pool)), &ready, logger, cfg.ShutdownTimeout)
 }
 
 // connect opens the database, retrying until it answers or ctx ends. A new

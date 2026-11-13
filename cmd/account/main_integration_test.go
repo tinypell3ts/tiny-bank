@@ -216,3 +216,52 @@ func TestReadyzFailsWhenTheDatabaseGoesAway(t *testing.T) {
 	}
 	t.Error("readyz never recovered after the database came back")
 }
+
+func TestAccountAPIEndToEnd(t *testing.T) {
+	base, _ := startService(t, dbtest.StartPostgres(t, "s3cret"))
+
+	// Open an account.
+	body := `{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada Lovelace","currency":"GBP"}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/accounts", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var created struct {
+		ID, Currency, Status string
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /accounts = %d, want 201", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Currency != "GBP" || created.Status != "open" {
+		t.Fatalf("POST /accounts body = %+v, want a GBP open account with an ID", created)
+	}
+	location := resp.Header.Get("Location")
+
+	// Follow Location back to the same account, now read from Postgres.
+	status, got := get(t, base+location)
+	if status != http.StatusOK || !strings.Contains(got, `"holder_name":"Ada Lovelace"`) || !strings.Contains(got, created.ID) {
+		t.Fatalf("GET %s = %d %s, want the account just created", location, status, got)
+	}
+
+	if status, _ := get(t, base+"/accounts/not-a-uuid"); status != http.StatusNotFound {
+		t.Errorf("GET /accounts/not-a-uuid = %d, want 404", status)
+	}
+
+	// Metrics label the route pattern, never the account ID (cardinality).
+	_, metrics := get(t, base+"/metrics")
+	if !strings.Contains(metrics, `http_route="/accounts/{id}"`) || !strings.Contains(metrics, `http_route="/accounts"`) {
+		t.Error("/metrics should count requests by route pattern")
+	}
+	if strings.Contains(metrics, created.ID) {
+		t.Error("/metrics must not contain account IDs")
+	}
+}

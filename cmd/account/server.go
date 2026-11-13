@@ -11,17 +11,21 @@ import (
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
+	"github.com/tinypell3ts/tiny-bank/services/account"
 )
 
 // newHandler wires routes and middleware, outermost first:
 //   - request ID, so everything after it can use the ID
 //   - access log, one line per request
 //   - metrics, directly around the mux so it can read the matched route
-func newHandler(logger *slog.Logger, ready *atomic.Bool, reg *prometheus.Registry, database pinger) http.Handler {
+func newHandler(logger *slog.Logger, ready *atomic.Bool, reg *prometheus.Registry,
+	database pinger, accounts account.Accounts,
+) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", kit.Healthz) // liveness never checks the database
 	mux.HandleFunc("GET /readyz", handleReadyz(ready, database))
 	mux.Handle("GET /metrics", obs.Handler(reg)) // scraped by Prometheus
+	account.RegisterRoutes(mux, accounts, logger)
 
 	metrics := obs.NewHTTPMetrics(reg)
 	return kit.RequestID(kit.AccessLog(logger, metrics.Middleware(mux)))
