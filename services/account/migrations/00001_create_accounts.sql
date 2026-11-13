@@ -5,7 +5,9 @@
 CREATE TABLE accounts (
     id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     holder_name text        NOT NULL CHECK (length(holder_name) BETWEEN 1 AND 200),
-    currency    char(3)     NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    -- Only the currencies pkg/money supports (money.GBP() and friends). Adding
+    -- one there means a new migration here that widens this check.
+    currency    char(3)     NOT NULL CHECK (currency IN ('GBP', 'EUR', 'USD', 'JPY')),
     status      text        NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
     created_at  timestamptz NOT NULL DEFAULT now()
 );

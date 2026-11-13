@@ -19,7 +19,9 @@ type Currency struct {
 	exponent int // digits after the decimal point: 2 for GBP (pence), 0 for JPY
 }
 
-// Supported currencies. Add one here only when tiny-bank needs it.
+// Supported currencies. Add one here only when tiny-bank needs it, together
+// with a migration widening the currency check in each service's tables
+// (see services/account/migrations).
 //
 // They're functions, not exported variables, because Go has no struct
 // constants: any package could reassign a variable (money.GBP = money.EUR)

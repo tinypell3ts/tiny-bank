@@ -15,6 +15,7 @@ import (
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
 // syncBuffer collects the service's log lines; run writes from its own goroutine.
@@ -56,13 +57,21 @@ func startService(t *testing.T, url string) (base string, logs *syncBuffer) {
 	env := map[string]string{"DATABASE_URL": url, "PORT": port}
 	logs = &syncBuffer{}
 
+	// run's result is stored once and done is closed after it, so both the
+	// readiness loop and cleanup can wait on done without taking the result
+	// from each other (a channel send can only be received once).
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- run(ctx, func(k string) string { return env[k] }, logs) }()
+	var runErr error
+	done := make(chan struct{})
+	go func() {
+		runErr = run(ctx, func(k string) string { return env[k] }, logs)
+		close(done)
+	}()
 	t.Cleanup(func() {
 		cancel() // what SIGTERM does in main
-		if err := <-done; err != nil {
-			t.Errorf("run: %v\nlogs:\n%s", err, logs)
+		<-done
+		if runErr != nil {
+			t.Errorf("run: %v\nlogs:\n%s", runErr, logs)
 		}
 	})
 
@@ -73,8 +82,8 @@ func startService(t *testing.T, url string) (base string, logs *syncBuffer) {
 			return base, logs
 		}
 		select {
-		case err := <-done:
-			t.Fatalf("service exited early: %v\nlogs:\n%s", err, logs)
+		case <-done:
+			t.Fatalf("service exited early: %v\nlogs:\n%s", runErr, logs)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -126,10 +135,22 @@ func TestServiceMigratesThenServes(t *testing.T) {
 		t.Errorf("got %s %s %s, want Ada GBP open", holder, currency, status)
 	}
 
+	// Every currency pkg/money supports is accepted.
+	for _, c := range []string{"GBP", "EUR", "USD", "JPY"} {
+		if _, err := money.ParseCurrency(c); err != nil {
+			t.Fatalf("test list is stale: %v", err)
+		}
+		if _, err := pool.Exec(t.Context(), "INSERT INTO accounts (holder_name, currency) VALUES ('Ada', $1)", c); err != nil {
+			t.Errorf("rejected supported currency %s: %v", c, err)
+		}
+	}
+
 	// The table's own checks reject bad data, even if the code ever didn't.
 	for _, bad := range []string{
 		"INSERT INTO accounts (holder_name, currency) VALUES ('', 'GBP')",
 		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'gbp')",
+		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'GPB')", // a typo of a real code
+		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'XYZ')", // well-formed but unsupported
 		"INSERT INTO accounts (holder_name, currency, status) VALUES ('Ada', 'GBP', 'frozen')",
 	} {
 		if _, err := pool.Exec(t.Context(), bad); err == nil {
