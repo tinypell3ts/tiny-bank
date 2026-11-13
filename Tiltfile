@@ -12,6 +12,10 @@ if k8s_context() != CONTEXT:
     fail('Tilt only runs against %s, but kubectl is on %s. Run `make cluster-up` first.' % (CONTEXT, k8s_context()))
 allow_k8s_contexts(CONTEXT)
 
+# A CloudNativePG Cluster runs pods, so tell Tilt to treat it as a workload,
+# like a Deployment: it then gets its own resource with its pods and logs.
+k8s_kind('Cluster', api_version='postgresql.cnpg.io/v1')
+
 def go_service(name, port):
     """Build cmd/<name>, deploy it with the shared chart, and forward localhost:<port>."""
     # Tilt tags each build with a content hash and loads it into kind itself,
@@ -29,7 +33,27 @@ def go_service(name, port):
     ))
     # Wait for the operators whose CRDs the shared chart uses: monitoring for the
     # ServiceMonitor, CloudNativePG for databases. (cnpg itself waits for monitoring.)
-    k8s_resource(name, port_forwards='%d:8080' % port, resource_deps=['monitoring', 'cnpg'], labels=['services'])
+    # Tilt attaches the Deployment's Service by itself; the ConfigMap and
+    # ServiceMonitor are listed so they don't land in "uncategorized".
+    k8s_resource(
+        name,
+        objects=['%s:configmap' % name, '%s:servicemonitor' % name],
+        port_forwards='%d:8080' % port,
+        resource_deps=['monitoring', 'cnpg'],
+        labels=[name],  # each service gets its own group: its app, plus its database if it has one
+    )
+
+    # A service with database.enabled gets a <name>-db resource next to it,
+    # holding its Cluster and the PodMonitor that scrapes it. Without this they
+    # don't match any resource by name and land in Tilt's "uncategorized".
+    values = read_yaml('deploy/values/%s.yaml' % name)
+    if values.get('database', {}).get('enabled'):
+        k8s_resource(
+            '%s-db' % name,
+            objects=['%s-db:podmonitor' % name],
+            resource_deps=['cnpg'],
+            labels=[name],  # shown in the service's own group, next to its app
+        )
 
 # One line per service. Each gets its own localhost port.
 go_service('hello', port=8080)
