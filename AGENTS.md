@@ -28,7 +28,7 @@ Format `<type>/<description>`, trunk is `main`.
 
 ## Commits — Conventional Commits
 
-`<type>(<scope>): <summary>`, for example `feat(ledger): add posting`, `docs(adr): record grpc decision`, `chore: add gitignore`.
+`<type>(<scope>): <summary>`, for example `feat(ledger): add posting`, `docs(adr): record typhon decision`, `chore: add gitignore`.
 Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`, `build`, `perf`.
 
 ## Repo layout
