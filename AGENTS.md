@@ -46,9 +46,13 @@ Current:
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
-├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, metrics, graceful shutdown
+├── cmd/hello/           # demo service: the smallest service built on pkg/kit
+├── cmd/account/         # account service binary: config, startup (connect, migrate), HTTP server, probes
+├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
+├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), RequestID, AccessLog, WriteJSON, Healthz
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
 ├── pkg/db/              # Postgres: Open a pgx pool from DATABASE_URL, Migrate with goose behind an advisory lock
+│   └── dbtest/          # StartPostgres for integration tests (testcontainers)
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
 ├── deploy/
 │   ├── kind/            # local kind cluster config
@@ -63,7 +67,7 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): more `pkg/` libraries (`kit`, `terrors`), `services/<name>/`, `proto/`.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `pkg/terrors`, Typhon-style filters in `pkg/kit`, and `proto/`.
 
 Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
@@ -81,7 +85,7 @@ make cluster-up               # create the local kind cluster "tiny-bank" (no-op
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
 make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
-make undeploy                 # helm-uninstall SERVICE
+make undeploy                 # helm-uninstall SERVICE (deletes its database and data too)
 make chart-check              # helm lint + kubeconform (incl. CRD schemas) for every deploy/values/*.yaml and chart ci/*.yaml
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
@@ -90,10 +94,10 @@ make cnpg-down                # remove the operator (CRDs and databases stay)
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
-make dev-down                 # remove what Tilt deployed (cluster, monitoring and CloudNativePG stay up)
+make dev-down                 # remove what Tilt deployed, INCLUDING every service database and its data (cluster, monitoring, CloudNativePG stay)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 3000 (Grafana) and 9090 (Prometheus) are taken.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 3000 (Grafana) and 9090 (Prometheus) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
@@ -104,6 +108,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 ## Conventions
 
 - **Money is `int64` minor units plus an ISO 4217 currency code**, always as `money.Money` from `pkg/money` ([ADR-0004](docs/adr/0004-represent-money-as-int64-minor-units.md)). Never use floats for money, never mix currencies silently, and always handle the error from `Add`/`Sub`. Never discard it with `_`: lint doesn't catch that, so reviewers must.
+- **Every HTTP service is built on `pkg/kit`:** `kit.Main`, `kit.LoadConfig` (embed `kit.Config` for extra settings), `kit.NewLogger`, `kit.Serve`, and the `kit.RequestID` and `kit.AccessLog` middleware. A service only writes its own routes, readiness check and startup. Never copy these into a service.
 - **Config from environment variables** (12-factor). No config files baked into images.
 - **Logs are structured JSON to stdout** via `log/slog`. Never log secrets or full card or account numbers.
 - **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.

@@ -45,6 +45,18 @@ spec:
                   name: {{ include "service.dbName" . }}-app
                   key: uri
           {{- end }}
+          # Startup: until this passes, Kubernetes runs no liveness or readiness
+          # checks, so a slow start isn't mistaken for a hung process. A service
+          # with a database connects and migrates before it listens, which can
+          # take about a minute on a brand-new database. 30 x 5s = 150s, longer
+          # than the services' 2-minute startup timeout. Fast services pass on
+          # the first check.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           # Liveness: is the process alive? Failing restarts the container.
           livenessProbe:
             httpGet:

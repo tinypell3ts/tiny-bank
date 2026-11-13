@@ -1,0 +1,8 @@
+# account's settings for the generic chart (deploy/charts/service).
+name: account
+image:
+  repository: tiny-bank/account
+# Its own Postgres, run by CloudNativePG: the chart creates account-db and
+# passes DATABASE_URL to the service from the secret the operator generates.
+database:
+  enabled: true

@@ -1,42 +1,28 @@
 // Command hello is the smallest possible tiny-bank service. It exists to prove the
-// foundations every real service will share: env config, JSON logs, request IDs,
-// health and readiness endpoints, and graceful shutdown.
+// foundations every real service shares, from pkg/kit: env config, JSON logs,
+// request IDs, health and readiness endpoints, metrics and graceful shutdown.
 package main
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
-	"os"
-	"os/signal"
 	"sync/atomic"
-	"syscall"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
-func main() {
-	// SIGTERM is what Kubernetes sends when it wants a pod to stop; Ctrl-C sends SIGINT.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Getenv, os.Stdout)
-	stop()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "hello:", err)
-		os.Exit(1)
-	}
-}
+func main() { kit.Main("hello", run) }
 
 // run holds everything main does, with its dependencies passed in so tests can call it.
 func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
-	cfg, err := loadConfig(getenv)
+	cfg, err := kit.LoadConfig(getenv)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-
-	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: cfg.LogLevel})).
-		With("service", "hello")
+	logger := kit.NewLogger(out, cfg.LogLevel, "hello")
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", ":"+cfg.Port)
@@ -45,5 +31,5 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	}
 
 	var ready atomic.Bool
-	return serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry()), &ready, logger, cfg.ShutdownTimeout)
+	return kit.Serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry()), &ready, logger, cfg.ShutdownTimeout)
 }

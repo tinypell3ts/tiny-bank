@@ -1,4 +1,4 @@
-package main
+package kit
 
 import (
 	"log/slog"
@@ -11,23 +11,23 @@ func TestLoadConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		env     map[string]string
-		want    config
+		want    Config
 		wantErr string // substring; empty means no error expected
 	}{
 		{
 			name: "defaults when nothing is set",
 			env:  map[string]string{},
-			want: config{Port: "8080", LogLevel: slog.LevelInfo, ShutdownTimeout: 10 * time.Second},
+			want: Config{Port: "8080", LogLevel: slog.LevelInfo, ShutdownTimeout: 10 * time.Second},
 		},
 		{
 			name: "all values set",
 			env:  map[string]string{"PORT": "9000", "LOG_LEVEL": "debug", "SHUTDOWN_TIMEOUT": "30s"},
-			want: config{Port: "9000", LogLevel: slog.LevelDebug, ShutdownTimeout: 30 * time.Second},
+			want: Config{Port: "9000", LogLevel: slog.LevelDebug, ShutdownTimeout: 30 * time.Second},
 		},
 		{
 			name: "log level is case-insensitive",
 			env:  map[string]string{"LOG_LEVEL": "WARN"},
-			want: config{Port: "8080", LogLevel: slog.LevelWarn, ShutdownTimeout: 10 * time.Second},
+			want: Config{Port: "8080", LogLevel: slog.LevelWarn, ShutdownTimeout: 10 * time.Second},
 		},
 		{name: "port not a number", env: map[string]string{"PORT": "http"}, wantErr: "PORT"},
 		{name: "port out of range", env: map[string]string{"PORT": "70000"}, wantErr: "PORT"},
@@ -38,7 +38,7 @@ func TestLoadConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := loadConfig(func(k string) string { return tt.env[k] })
+			got, err := LoadConfig(func(k string) string { return tt.env[k] })
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -50,7 +50,7 @@ func TestLoadConfig(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if got != tt.want {
-				t.Errorf("config = %+v, want %+v", got, tt.want)
+				t.Errorf("Config = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

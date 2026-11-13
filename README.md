@@ -2,7 +2,7 @@
 
 A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 4, done. One demo service, `cmd/hello`, running in Docker on a local Kubernetes cluster with a one-command dev loop, Prometheus and Grafana, a shared `pkg/money` type for amounts, and Postgres for services: CloudNativePG on the cluster, `pkg/db` for connections and migrations.
+> **Status:** Phase 5, done. Two services on a local Kubernetes cluster with a one-command dev loop: `hello`, and the **account service**, which opens and looks up accounts in its own Postgres. Both are built on a shared foundation (`pkg/kit`), with Prometheus and Grafana, `pkg/money` for amounts and `pkg/db` for connections and migrations.
 
 ## What it will be
 
@@ -46,7 +46,16 @@ make dev            # creates the cluster if needed, then starts Tilt
 curl localhost:8080/healthz
 ```
 
-Tilt builds the image, deploys it with Helm and forwards `localhost:8080`. It also installs Prometheus and Grafana, and the CloudNativePG operator that will run each service's Postgres database: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (monitoring and CloudNativePG stay; `make monitoring-down` and `make cnpg-down` remove them), and `make cluster-down` to delete the cluster.
+Tilt builds the images, deploys them with Helm and forwards `hello` to `localhost:8080` and `account` to `localhost:8081`. It also installs Prometheus and Grafana, and the CloudNativePG operator that will run each service's Postgres database: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (**this deletes each service's database and everything in it**, such as accounts; monitoring and CloudNativePG stay; `make monitoring-down` and `make cnpg-down` remove them), and `make cluster-down` to delete the cluster.
+
+Open an account and look it up (the account service has its own Postgres, created on the first `make dev`):
+
+```bash
+curl -i -X POST localhost:8081/accounts -H 'Content-Type: application/json' \
+  -d '{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada Lovelace","currency":"GBP"}'
+```
+
+The response's `Location` header is the account's address, for example `curl localhost:8081/accounts/<id>`. The API is internal for now: it has no sign-in until the edge gateway in Phase 12.
 
 Without Tilt, for a one-off deploy:
 
