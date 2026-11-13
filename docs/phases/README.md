@@ -19,6 +19,7 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | 9 | Kafka via Strimzi | |
 | 10 | Transactional outbox | |
 | 11 | Notification service | |
-| 12 | Edge gateway + ingress | |
+| 11.5 | Customer service + onboarding: a customer exists (and is verified) before any account is opened for them | |
+| 12 | Edge gateway + ingress: sign-in, and the customer ID comes from the signed-in caller, never the request body | |
 | 13 | Hardening (limits, NetworkPolicies, alerts) | |
 | 14 | CI end-to-end on kind | |

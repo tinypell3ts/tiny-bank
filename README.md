@@ -46,7 +46,16 @@ make dev            # creates the cluster if needed, then starts Tilt
 curl localhost:8080/healthz
 ```
 
-Tilt builds the image, deploys it with Helm and forwards `localhost:8080`. It also installs Prometheus and Grafana, and the CloudNativePG operator that will run each service's Postgres database: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (monitoring and CloudNativePG stay; `make monitoring-down` and `make cnpg-down` remove them), and `make cluster-down` to delete the cluster.
+Tilt builds the images, deploys them with Helm and forwards `hello` to `localhost:8080` and `account` to `localhost:8081`. It also installs Prometheus and Grafana, and the CloudNativePG operator that will run each service's Postgres database: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (monitoring and CloudNativePG stay; `make monitoring-down` and `make cnpg-down` remove them), and `make cluster-down` to delete the cluster.
+
+Open an account and look it up (the account service has its own Postgres, created on the first `make dev`):
+
+```bash
+curl -i -X POST localhost:8081/accounts -H 'Content-Type: application/json' \
+  -d '{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada Lovelace","currency":"GBP"}'
+```
+
+The response's `Location` header is the account's address, for example `curl localhost:8081/accounts/<id>`. The API is internal for now: it has no sign-in until the edge gateway in Phase 12.
 
 Without Tilt, for a one-off deploy:
 

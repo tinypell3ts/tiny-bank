@@ -97,7 +97,7 @@ make dev                      # day-to-day: Tilt builds, deploys and port-forwar
 make dev-down                 # remove what Tilt deployed (cluster, monitoring and CloudNativePG stay up)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 3000 (Grafana) and 9090 (Prometheus) are taken.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 3000 (Grafana) and 9090 (Prometheus) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 

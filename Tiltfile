@@ -33,6 +33,7 @@ def go_service(name, port):
 
 # One line per service. Each gets its own localhost port.
 go_service('hello', port=8080)
+go_service('account', port=8081)
 
 # --- Monitoring: Prometheus + Grafana (kube-prometheus-stack) ---
 # Installed with plain Helm through `make monitoring`, so it works the same with
