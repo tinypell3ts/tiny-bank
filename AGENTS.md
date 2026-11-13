@@ -85,7 +85,7 @@ make cluster-up               # create the local kind cluster "tiny-bank" (no-op
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
 make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
-make undeploy                 # helm-uninstall SERVICE
+make undeploy                 # helm-uninstall SERVICE (deletes its database and data too)
 make chart-check              # helm lint + kubeconform (incl. CRD schemas) for every deploy/values/*.yaml and chart ci/*.yaml
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
@@ -94,7 +94,7 @@ make cnpg-down                # remove the operator (CRDs and databases stay)
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
-make dev-down                 # remove what Tilt deployed (cluster, monitoring and CloudNativePG stay up)
+make dev-down                 # remove what Tilt deployed, INCLUDING every service database and its data (cluster, monitoring, CloudNativePG stay)
 ```
 
 Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 3000 (Grafana) and 9090 (Prometheus) are taken.

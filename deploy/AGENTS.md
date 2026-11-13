@@ -35,7 +35,8 @@ deploy/
 - **Dashboards live in git.** Grafana dashboards are JSON files in `monitoring/dashboards/`, each with a fixed `uid`. Changes made in the Grafana UI are lost when its pod restarts, so build in the UI, then use *Export → Export as JSON* and save over the file. Panels about service traffic filter out probes and scrapes with `http_route!~"/healthz|/readyz|/metrics"`.
 - **One database per service, declared in the chart.** A service that stores data sets `database.enabled: true` in its values file. The chart then creates a CloudNativePG `Cluster` called `<name>-db`, a `PodMonitor` so Prometheus scrapes Postgres, and a `DATABASE_URL` env var. That variable is read from the `<name>-db-app` secret the operator generates. Never hard-code database passwords, and never let two services share a database: services talk to each other through their APIs.
 - **Custom resources are validated too.** `make chart-check` checks custom types like `ServiceMonitor` against schemas from the [CRDs catalog](https://github.com/datreeio/CRDs-catalog), pinned to one commit by `CRD_SCHEMAS` in the Makefile. A new custom type must have a schema there, otherwise the check fails.
-- **Don't mix `make dev` and `make deploy` for the same service.** Both create the same resources. Use `make dev-down` or `make undeploy` first.
+- **Teardown deletes data.** A service's database (`<name>-db`) belongs to its release: its storage is owned by the CloudNativePG `Cluster`, so `make dev-down`, `make undeploy` and `make cluster-down` all delete the database and every row in it. Locally that's fine, but say so wherever these commands are suggested. Stop Tilt with Ctrl-C instead to keep the data.
+- **Don't mix `make dev` and `make deploy` for the same service.** Both create the same resources. Use `make dev-down` or `make undeploy` first, which deletes the service's database.
 
 ## Checking changes
 
