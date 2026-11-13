@@ -19,9 +19,12 @@ import (
 // migrations, and returns a Store on it.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
+	// Start Postgres first: pulling the image can be slow, and shouldn't use up
+	// the deadline for connecting and migrating.
+	url := dbtest.StartPostgres(t, "s3cret")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pool, err := db.Open(ctx, dbtest.StartPostgres(t, "s3cret"))
+	pool, err := db.Open(ctx, url)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
