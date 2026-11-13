@@ -126,7 +126,7 @@ func TestServiceMigratesThenServes(t *testing.T) {
 	defer pool.Close()
 	var holder, currency, status string
 	err = pool.QueryRow(t.Context(),
-		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'GBP') RETURNING holder_name, currency, status",
+		"INSERT INTO accounts (customer_id, holder_name, currency) VALUES (gen_random_uuid(), 'Ada', 'GBP') RETURNING holder_name, currency, status",
 	).Scan(&holder, &currency, &status)
 	if err != nil {
 		t.Fatalf("insert into accounts: %v", err)
@@ -140,18 +140,19 @@ func TestServiceMigratesThenServes(t *testing.T) {
 		if _, err := money.ParseCurrency(c); err != nil {
 			t.Fatalf("test list is stale: %v", err)
 		}
-		if _, err := pool.Exec(t.Context(), "INSERT INTO accounts (holder_name, currency) VALUES ('Ada', $1)", c); err != nil {
+		if _, err := pool.Exec(t.Context(), "INSERT INTO accounts (customer_id, holder_name, currency) VALUES (gen_random_uuid(), 'Ada', $1)", c); err != nil {
 			t.Errorf("rejected supported currency %s: %v", c, err)
 		}
 	}
 
 	// The table's own checks reject bad data, even if the code ever didn't.
 	for _, bad := range []string{
-		"INSERT INTO accounts (holder_name, currency) VALUES ('', 'GBP')",
-		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'gbp')",
-		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'GPB')", // a typo of a real code
-		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'XYZ')", // well-formed but unsupported
-		"INSERT INTO accounts (holder_name, currency, status) VALUES ('Ada', 'GBP', 'frozen')",
+		"INSERT INTO accounts (holder_name, currency) VALUES ('Ada', 'GBP')", // no customer
+		"INSERT INTO accounts (customer_id, holder_name, currency) VALUES (gen_random_uuid(), '', 'GBP')",
+		"INSERT INTO accounts (customer_id, holder_name, currency) VALUES (gen_random_uuid(), 'Ada', 'gbp')",
+		"INSERT INTO accounts (customer_id, holder_name, currency) VALUES (gen_random_uuid(), 'Ada', 'GPB')", // a typo of a real code
+		"INSERT INTO accounts (customer_id, holder_name, currency) VALUES (gen_random_uuid(), 'Ada', 'XYZ')", // well-formed but unsupported
+		"INSERT INTO accounts (customer_id, holder_name, currency, status) VALUES (gen_random_uuid(), 'Ada', 'GBP', 'frozen')",
 	} {
 		if _, err := pool.Exec(t.Context(), bad); err == nil {
 			t.Errorf("accepted %q, want a check constraint error", bad)
