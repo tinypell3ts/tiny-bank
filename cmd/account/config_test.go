@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 )
 
 const testURL = "postgres://app:s3cret@db:5432/app" //nolint:gosec // fake credentials, to check errors never echo them
@@ -19,12 +21,12 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "defaults when only DATABASE_URL is set",
 			env:  map[string]string{"DATABASE_URL": testURL},
-			want: config{Port: "8080", LogLevel: slog.LevelInfo, ShutdownTimeout: 10 * time.Second, DatabaseURL: testURL},
+			want: config{Config: kit.Config{Port: "8080", LogLevel: slog.LevelInfo, ShutdownTimeout: 10 * time.Second}, DatabaseURL: testURL},
 		},
 		{
 			name: "all values set",
 			env:  map[string]string{"PORT": "9000", "LOG_LEVEL": "debug", "SHUTDOWN_TIMEOUT": "30s", "DATABASE_URL": testURL},
-			want: config{Port: "9000", LogLevel: slog.LevelDebug, ShutdownTimeout: 30 * time.Second, DatabaseURL: testURL},
+			want: config{Config: kit.Config{Port: "9000", LogLevel: slog.LevelDebug, ShutdownTimeout: 30 * time.Second}, DatabaseURL: testURL},
 		},
 		{name: "database URL missing", env: map[string]string{}, wantErr: "DATABASE_URL is required"},
 		{name: "port not a number", env: map[string]string{"PORT": "http", "DATABASE_URL": testURL}, wantErr: "PORT"},

@@ -1,9 +1,10 @@
 // Command account is the account service: it opens and looks up customers'
 // accounts, stored in its own Postgres database.
 //
-// It shares its foundations with cmd/hello (env config, JSON logs, request IDs,
-// health, metrics, graceful shutdown). That code is copied for now and moves to
-// pkg/kit in Phase 5.5, once there are two services to share it.
+// Its foundations (env config, JSON logs, request IDs, health, metrics,
+// graceful shutdown) come from pkg/kit, shared with every service. What's
+// here is what only the account service does: connect to and migrate its
+// database before serving, and check the database in /readyz.
 package main
 
 import (
@@ -13,15 +14,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"os"
-	"os/signal"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 	"github.com/tinypell3ts/tiny-bank/services/account"
 )
@@ -35,16 +34,7 @@ const (
 	retryEvery = 2 * time.Second
 )
 
-func main() {
-	// SIGTERM is what Kubernetes sends when it wants a pod to stop; Ctrl-C sends SIGINT.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Getenv, os.Stdout)
-	stop()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "account:", err)
-		os.Exit(1)
-	}
-}
+func main() { kit.Main("account", run) }
 
 // run holds everything main does, with its dependencies passed in so tests can call it.
 func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
@@ -53,8 +43,7 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: cfg.LogLevel})).
-		With("service", "account")
+	logger := kit.NewLogger(out, cfg.LogLevel, "account")
 
 	// Connect and migrate before serving anything, so the service never takes
 	// traffic with an old schema.
@@ -79,7 +68,7 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	}
 
 	var ready atomic.Bool
-	return serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry(), pool), &ready, logger, cfg.ShutdownTimeout)
+	return kit.Serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry(), pool), &ready, logger, cfg.ShutdownTimeout)
 }
 
 // connect opens the database, retrying until it answers or ctx ends. A new

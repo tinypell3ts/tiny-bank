@@ -12,7 +12,7 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | 3 | `pkg/money` domain | [03-money](03-money.md) |
 | 4 | Postgres via CloudNativePG + migrations | [04-postgres](04-postgres.md) |
 | 5 | Account service (HTTP/JSON) on k8s, its `accounts` table and `/readyz` database check | |
-| 5.5 | Extract `pkg/kit` + `pkg/terrors` (Typhon-style filters) | |
+| 5.5 | Typhon-style filters in `pkg/kit` + `pkg/terrors` (the plain `pkg/kit` foundation arrived in Phase 5) | |
 | 6 | Protobuf + gRPC | |
 | 7 | Ledger service (double-entry) | |
 | 8 | Transaction service + tracing | |

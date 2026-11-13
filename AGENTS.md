@@ -46,9 +46,10 @@ Current:
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
-├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, metrics, graceful shutdown
+├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: config, startup (connect, migrate), HTTP server, probes
 ├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
+├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), RequestID, AccessLog, WriteJSON, Healthz
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
 ├── pkg/db/              # Postgres: Open a pgx pool from DATABASE_URL, Migrate with goose behind an advisory lock
 │   └── dbtest/          # StartPostgres for integration tests (testcontainers)
@@ -66,7 +67,7 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): more `pkg/` libraries (`kit`, `terrors`) and `proto/`.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `pkg/terrors`, Typhon-style filters in `pkg/kit`, and `proto/`.
 
 Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
@@ -107,6 +108,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 ## Conventions
 
 - **Money is `int64` minor units plus an ISO 4217 currency code**, always as `money.Money` from `pkg/money` ([ADR-0004](docs/adr/0004-represent-money-as-int64-minor-units.md)). Never use floats for money, never mix currencies silently, and always handle the error from `Add`/`Sub`. Never discard it with `_`: lint doesn't catch that, so reviewers must.
+- **Every HTTP service is built on `pkg/kit`:** `kit.Main`, `kit.LoadConfig` (embed `kit.Config` for extra settings), `kit.NewLogger`, `kit.Serve`, and the `kit.RequestID` and `kit.AccessLog` middleware. A service only writes its own routes, readiness check and startup. Never copy these into a service.
 - **Config from environment variables** (12-factor). No config files baked into images.
 - **Logs are structured JSON to stdout** via `log/slog`. Never log secrets or full card or account numbers.
 - **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.
