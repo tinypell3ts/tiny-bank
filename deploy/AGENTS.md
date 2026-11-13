@@ -22,6 +22,7 @@ deploy/
 - **Only target the local cluster.** Every command passes `--kube-context kind-tiny-bank` (or `--context`). Never rely on kubectl's current context. The `Tiltfile` refuses to run anywhere else.
 - **Never deploy a fixed tag.** Deploy content-tagged images (`make deploy` → `build-<hash>`, Tilt → `tilt-<hash>`). A fixed tag like `:dev` looks unchanged to Kubernetes, so the old code keeps running.
 - **Keep the security defaults.** Pods run as non-root with a numeric UID (`USER 65532:65532` in the Dockerfile), a read-only root filesystem, no privilege escalation, all capabilities dropped, and no service-account token. Loosen one only with an ADR explaining why.
+- **Startup probe first.** Every pod has a startup probe on `/healthz` (up to 150s). Until it passes, Kubernetes runs no liveness or readiness checks, so a service that connects and migrates before listening isn't restarted mid-start. Keep a service's own startup timeout (2 minutes for `cmd/account`) below 150s.
 - **Liveness never checks dependencies.** `/healthz` reports only "the process is alive". Database or Kafka checks belong in `/readyz`, otherwise a dependency blip restarts every pod at once.
 - **Keep shutdown timings consistent.** `terminationGracePeriodSeconds` is computed as `preStopSleepSeconds + shutdownTimeoutSeconds + 5`. Change those two values, never the grace period directly. The app reads `SHUTDOWN_TIMEOUT` from the same value.
 - **Memory limit, no CPU limit.** Set memory requests and limits, and CPU requests only. CPU limits throttle the app even on an idle node.

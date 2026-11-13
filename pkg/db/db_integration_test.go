@@ -12,35 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 )
 
-// postgresImage matches the Postgres version CloudNativePG runs on the cluster
-// (ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie). Tests use the official
-// image because testcontainers relies on its startup script to set a password.
-const postgresImage = "postgres:18.6-trixie"
-
 // startPostgres runs a throwaway Postgres for one test and returns its URL.
-// The container is removed when the test ends.
 func startPostgres(t *testing.T) string {
 	t.Helper()
-	ctx := t.Context()
-	ctr, err := postgres.Run(ctx, postgresImage,
-		postgres.WithDatabase("app"),
-		postgres.WithUsername("app"),
-		postgres.WithPassword(secret),
-		postgres.BasicWaitStrategies(),
-	)
-	testcontainers.CleanupContainer(t, ctr)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("connection string: %v", err)
-	}
-	return dsn
+	return dbtest.StartPostgres(t, secret)
 }
 
 func TestOpenConnectsAndQueries(t *testing.T) {

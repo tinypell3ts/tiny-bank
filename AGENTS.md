@@ -47,8 +47,11 @@ Current:
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: env config, JSON logs, request IDs, health, metrics, graceful shutdown
+├── cmd/account/         # account service binary: config, startup (connect, migrate), HTTP server, probes
+├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
 ├── pkg/db/              # Postgres: Open a pgx pool from DATABASE_URL, Migrate with goose behind an advisory lock
+│   └── dbtest/          # StartPostgres for integration tests (testcontainers)
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
 ├── deploy/
 │   ├── kind/            # local kind cluster config
@@ -63,7 +66,7 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Planned (added only when a phase needs them): more `pkg/` libraries (`kit`, `terrors`), `services/<name>/`, `proto/`.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): more `pkg/` libraries (`kit`, `terrors`) and `proto/`.
 
 Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
 
