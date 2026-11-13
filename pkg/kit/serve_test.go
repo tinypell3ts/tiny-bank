@@ -2,6 +2,7 @@ package kit
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -108,6 +109,42 @@ func TestServeGivesUpAfterShutdownTimeout(t *testing.T) {
 	err := waitFor(t, serveErr)
 	if err == nil || !strings.Contains(err.Error(), "shutdown") {
 		t.Fatalf("err = %v, want a shutdown timeout error", err)
+	}
+}
+
+func TestServeCancelsRequestsLeftAtTheShutdownDeadline(t *testing.T) {
+	// A handler stuck on a dependency that never answers, like a query to an
+	// unresponsive database: it only stops when its context is cancelled.
+	ln := listen(t)
+	started := make(chan struct{})
+	stopped := make(chan error, 1)
+	h := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		stopped <- r.Context().Err()
+	})
+
+	var ready atomic.Bool
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	serveErr := startServe(ctx, ln, h, &ready, 50*time.Millisecond)
+
+	go func() { _, _ = doGet(context.WithoutCancel(t.Context()), "http://"+ln.Addr().String()+"/") }()
+	<-started
+	cancel()
+
+	if err := waitFor(t, serveErr); err == nil || !strings.Contains(err.Error(), "shutdown") {
+		t.Fatalf("err = %v, want a shutdown timeout error", err)
+	}
+	// By the time Serve returns, the stuck request has been told to stop, so
+	// closing the database pool next won't wait for it.
+	select {
+	case err := <-stopped:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("request context err = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the stuck request was never cancelled after the shutdown deadline")
 	}
 }
 
