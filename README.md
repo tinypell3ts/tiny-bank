@@ -2,7 +2,7 @@
 
 A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 5, done. Two services on a local Kubernetes cluster with a one-command dev loop: `hello`, and the **account service**, which opens and looks up accounts in its own Postgres. Both are built on a shared foundation (`pkg/kit`), with Prometheus and Grafana, `pkg/money` for amounts and `pkg/db` for connections and migrations.
+> **Status:** Phase 5.5, done. Two services on a local Kubernetes cluster with a one-command dev loop: `hello`, and the **account service**, which opens and looks up accounts in its own Postgres. Both are built on a shared foundation (`pkg/kit`) on Typhon and terrors, which gives every service the same request IDs, logs, metrics and safe errors, checked by one conformance suite. Prometheus and Grafana run on the cluster, with `pkg/money` for amounts and `pkg/db` for connections and migrations.
 
 ## What it will be
 

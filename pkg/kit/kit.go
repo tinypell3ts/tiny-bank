@@ -1,9 +1,13 @@
-// Package kit is the shared foundation of every tiny-bank HTTP service:
-// config from the environment, JSON logs, running the server with graceful
-// shutdown, request IDs, access logs, JSON responses and the liveness check.
+// Package kit is the shared foundation of every tiny-bank service: config
+// from the environment (with Secret for anything secret), JSON logs, running
+// the server with graceful shutdown, and Handler, which puts a service's
+// Typhon router behind the filters every service shares: request IDs, access
+// logs, metrics, safe errors and panic recovery. DecodeJSON reads request
+// bodies strictly, and Health is the liveness check.
 //
 // A service wires these together with its own routes, readiness check and
 // startup steps. Anything that differs between services stays in the service.
+// Package kittest checks that a service is wired up correctly.
 package kit
 
 import (

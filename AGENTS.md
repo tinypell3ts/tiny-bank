@@ -70,7 +70,7 @@ Current:
 
 Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `proto/` for protobuf contracts.
 
-Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
+Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop, and [pkg/kit/AGENTS.md](pkg/kit/AGENTS.md) for changing the shared foundation.
 
 ## Commands
 
