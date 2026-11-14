@@ -49,7 +49,7 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	// traffic with an old schema.
 	startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	pool, err := connect(startCtx, logger, cfg.DatabaseURL)
+	pool, err := connect(startCtx, logger, cfg.DatabaseURL.Reveal()) // the one place the password is used
 	if err != nil {
 		return err
 	}
