@@ -3,7 +3,7 @@
 ## What we built
 
 - **Shared metrics** (`pkg/obs`): a registry with Go runtime and process metrics, a `/metrics` handler, and HTTP middleware that records one histogram, `http_server_request_duration_seconds`. Its labels are method, route and status code, so it covers rate, errors and duration. It also records a gauge, `http_server_active_requests`. `hello` serves them at `GET /metrics`.
-- **A safe status recorder** (`obs.StatusRecorder`): it records the status code the client actually received. Both the metrics and `hello`'s access log use it.
+- **A safe status recorder** (`obs.StatusRecorder`): it records the status code the client actually received. Both the metrics and `hello`'s access log use it. (Phase 5.5 replaced the middleware and recorder with Typhon filters in `pkg/kit`, which read the status from the response.)
 - **The monitoring stack** (`deploy/monitoring/values.yaml`): `make monitoring` installs kube-prometheus-stack (Prometheus Operator, Prometheus, Grafana, kube-state-metrics) into the `monitoring` namespace. `make dev` does too, and forwards Grafana to `localhost:3000` and Prometheus to `localhost:9090`.
 - **Automatic scraping:** the shared chart creates a `ServiceMonitor` for each service, so Prometheus finds and scrapes every service. `make chart-check` validates it against a pinned schema.
 - **A starter dashboard** (`deploy/monitoring/dashboards/`): *tiny-bank / Services (RED)* shows requests per second, 5xx error ratio and latency per service and route, without probes and scrapes. It's JSON in git, loaded by `make dashboards`. Under Tilt it reloads on save, and CI checks it with `make dashboards-check`.
@@ -55,7 +55,7 @@ Open [localhost:9090/targets](http://localhost:9090/targets): `hello` is listed 
 for i in $(seq 1 100); do curl -s -o /dev/null localhost:8080/; sleep 0.2; done
 ```
 
-Open [localhost:3000/d/tiny-bank-services](http://localhost:3000/d/tiny-bank-services). Within a minute, requests per second rise for `hello GET /{$}`, and the error ratio stays at 0%. When you're done:
+Open [localhost:3000/d/tiny-bank-services](http://localhost:3000/d/tiny-bank-services). Within a minute, requests per second rise for `hello GET /`, and the error ratio stays at 0%. When you're done:
 
 ```bash
 make dev-down

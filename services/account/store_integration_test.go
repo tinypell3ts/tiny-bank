@@ -10,6 +10,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/monzo/terrors"
+
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
@@ -86,16 +88,20 @@ func TestStoreCreateRejectsInvalidRequests(t *testing.T) {
 		{CustomerID: customer, HolderName: "Ada", Currency: money.Currency{}},
 		{CustomerID: uuid.Nil(), HolderName: "Ada", Currency: money.GBP()},
 	} {
-		if _, err := s.Create(t.Context(), req); !errors.Is(err, ErrInvalid) {
-			t.Errorf("Create(%+v) err = %v, want ErrInvalid", req, err)
+		// terrors.PrefixMatches(err, …) doesn't look inside wrapping, and Create
+		// wraps ("create account: …"), so find the terror with errors.As.
+		var terr *terrors.Error
+		if _, err := s.Create(t.Context(), req); !errors.As(err, &terr) || !terr.PrefixMatches(terrors.ErrBadRequest) {
+			t.Errorf("Create(%+v) err = %v, want a terrors bad_request", req, err)
 		}
 	}
 }
 
 func TestStoreGetMissing(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.Get(t.Context(), uuid.New()); !errors.Is(err, ErrNotFound) {
-		t.Errorf("Get(random ID) err = %v, want ErrNotFound", err)
+	var terr *terrors.Error
+	if _, err := s.Get(t.Context(), uuid.New()); !errors.As(err, &terr) || !terr.PrefixMatches(terrors.ErrNotFound) {
+		t.Errorf("Get(random ID) err = %v, want a terrors not_found", err)
 	}
 }
 
@@ -131,11 +137,13 @@ func TestStoreAcceptsEveryNameValidateAccepts(t *testing.T) {
 	}
 }
 
-func TestStoreCreateErrorStillMatchesErrInvalid(t *testing.T) {
+func TestStoreCreateErrorKeepsItsTerror(t *testing.T) {
+	// Create wraps Validate's error with context ("create account: ..."); the
+	// terror inside must still be found, so kit.Handler sends its code.
 	s := newTestStore(t)
 	_, err := s.Create(t.Context(), NewRequest{CustomerID: customer, Currency: money.GBP()})
-	var ve *ValidationError
-	if !errors.Is(err, ErrInvalid) || !errors.As(err, &ve) || ve.Reason != "holder name is required" {
-		t.Fatalf("err = %v, want a ValidationError with just the reason", err)
+	var terr *terrors.Error
+	if !errors.As(err, &terr) || terr.Code != "bad_request.holder_name" || terr.Message != "holder name is required" {
+		t.Fatalf("err = %v, want bad_request.holder_name with just the reason", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
@@ -25,6 +26,17 @@ type slowDB struct{}
 
 func (slowDB) Ping(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 
+// TestConformance checks the account service follows every rule services get
+// from pkg/kit: health, request IDs, errors and metrics. The database is faked
+// as up; what happens when it's down is tested below.
+func TestConformance(t *testing.T) {
+	kittest.Conformance(t, func() http.Handler {
+		var ready atomic.Bool
+		ready.Store(true)
+		return newHandler(slog.New(slog.DiscardHandler), &ready, obs.NewRegistry(), fakeDB{}, nil)
+	})
+}
+
 func TestHandlerRoutes(t *testing.T) {
 	down := fakeDB{err: errors.New("connection refused: secret detail")}
 	tests := []struct {
@@ -35,13 +47,9 @@ func TestHandlerRoutes(t *testing.T) {
 		wantStatus int
 		wantBody   string // substring; empty means don't check
 	}{
-		{"healthz ok", "/healthz", true, fakeDB{}, http.StatusOK, `"status":"ok"`},
 		{"healthz ignores the database", "/healthz", true, down, http.StatusOK, `"status":"ok"`},
-		{"readyz ok", "/readyz", true, fakeDB{}, http.StatusOK, `"status":"ok"`},
 		{"readyz while shutting down", "/readyz", false, fakeDB{}, http.StatusServiceUnavailable, `"status":"not ready"`},
 		{"readyz when the database is down", "/readyz", true, down, http.StatusServiceUnavailable, `"status":"database unavailable"`},
-		{"metrics", "/metrics", true, fakeDB{}, http.StatusOK, "go_goroutines"},
-		{"unknown path", "/nope", true, fakeDB{}, http.StatusNotFound, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

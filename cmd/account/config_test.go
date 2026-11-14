@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -21,12 +22,12 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "defaults when only DATABASE_URL is set",
 			env:  map[string]string{"DATABASE_URL": testURL},
-			want: config{Config: kit.Config{Port: "8080", LogLevel: slog.LevelInfo, ShutdownTimeout: 10 * time.Second}, DatabaseURL: testURL},
+			want: config{Config: kit.Config{Port: "8080", LogLevel: slog.LevelInfo, ShutdownTimeout: 10 * time.Second}, DatabaseURL: kit.Secret(testURL)},
 		},
 		{
 			name: "all values set",
 			env:  map[string]string{"PORT": "9000", "LOG_LEVEL": "debug", "SHUTDOWN_TIMEOUT": "30s", "DATABASE_URL": testURL},
-			want: config{Config: kit.Config{Port: "9000", LogLevel: slog.LevelDebug, ShutdownTimeout: 30 * time.Second}, DatabaseURL: testURL},
+			want: config{Config: kit.Config{Port: "9000", LogLevel: slog.LevelDebug, ShutdownTimeout: 30 * time.Second}, DatabaseURL: kit.Secret(testURL)},
 		},
 		{name: "database URL missing", env: map[string]string{}, wantErr: "DATABASE_URL is required"},
 		{name: "port not a number", env: map[string]string{"PORT": "http", "DATABASE_URL": testURL}, wantErr: "PORT"},
@@ -54,5 +55,21 @@ func TestLoadConfig(t *testing.T) {
 				t.Errorf("config = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfigNeverPrintsTheDatabasePassword(t *testing.T) {
+	cfg, err := loadConfig(func(k string) string { return map[string]string{"DATABASE_URL": testURL}[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Logging or printing the whole config, a common debugging move, is safe.
+	for _, out := range []string{fmt.Sprintf("%v", cfg), fmt.Sprintf("%+v", cfg), fmt.Sprintf("%#v", cfg)} {
+		if strings.Contains(out, "s3cret") {
+			t.Errorf("config printed the password: %s", out)
+		}
+	}
+	if cfg.DatabaseURL.Reveal() != testURL {
+		t.Error("Reveal should return the real URL for db.Open")
 	}
 }

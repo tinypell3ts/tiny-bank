@@ -30,8 +30,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 const columns = "id, customer_id, holder_name, currency, status, created_at"
 
 // Create opens a new account and returns it, with the ID and created time
-// Postgres assigned. It validates req first, so a bad request returns
-// ErrInvalid without touching the database.
+// Postgres assigned. It validates req first, so a bad request returns a
+// terrors bad_request without touching the database.
 func (s *Store) Create(ctx context.Context, req NewRequest) (Account, error) {
 	req, err := req.Validate()
 	if err != nil {
@@ -48,14 +48,14 @@ func (s *Store) Create(ctx context.Context, req NewRequest) (Account, error) {
 	return acc, nil
 }
 
-// Get returns the account with id, or ErrNotFound. Parsing untrusted text
+// Get returns the account with id, or a terrors not_found. Parsing untrusted text
 // into a uuid.UUID is the caller's job (the HTTP handler), so a malformed ID
 // never gets this far.
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Account, error) {
 	row := s.pool.QueryRow(ctx, "SELECT "+columns+" FROM accounts WHERE id = $1", id)
 	acc, err := scanAccount(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Account{}, ErrNotFound
+		return Account{}, errNotFound()
 	}
 	if err != nil {
 		return Account{}, fmt.Errorf("get account: %w", err)

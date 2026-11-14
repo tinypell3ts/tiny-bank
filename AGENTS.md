@@ -28,7 +28,7 @@ Format `<type>/<description>`, trunk is `main`.
 
 ## Commits — Conventional Commits
 
-`<type>(<scope>): <summary>`, for example `feat(ledger): add posting`, `docs(adr): record grpc decision`, `chore: add gitignore`.
+`<type>(<scope>): <summary>`, for example `feat(ledger): add posting`, `docs(adr): record typhon decision`, `chore: add gitignore`.
 Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`, `build`, `perf`.
 
 ## Repo layout
@@ -49,8 +49,9 @@ Current:
 ├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: config, startup (connect, migrate), HTTP server, probes
 ├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
-├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), RequestID, AccessLog, WriteJSON, Healthz
-├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED middleware, StatusRecorder
+├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), Handler (Typhon router + shared filters), DecodeJSON, Health, Secret
+│   └── kittest/         # Conformance: the checks every service's handler must pass (health, request IDs, errors, metrics)
+├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED metrics (Track)
 ├── pkg/db/              # Postgres: Open a pgx pool from DATABASE_URL, Migrate with goose behind an advisory lock
 │   └── dbtest/          # StartPostgres for integration tests (testcontainers)
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
@@ -67,9 +68,9 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `pkg/terrors`, Typhon-style filters in `pkg/kit`, and `proto/`.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `proto/` for protobuf contracts.
 
-Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop.
+Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop, and [pkg/kit/AGENTS.md](pkg/kit/AGENTS.md) for changing the shared foundation.
 
 ## Commands
 
@@ -108,12 +109,14 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 ## Conventions
 
 - **Money is `int64` minor units plus an ISO 4217 currency code**, always as `money.Money` from `pkg/money` ([ADR-0004](docs/adr/0004-represent-money-as-int64-minor-units.md)). Never use floats for money, never mix currencies silently, and always handle the error from `Add`/`Sub`. Never discard it with `_`: lint doesn't catch that, so reviewers must.
-- **Every HTTP service is built on `pkg/kit`:** `kit.Main`, `kit.LoadConfig` (embed `kit.Config` for extra settings), `kit.NewLogger`, `kit.Serve`, and the `kit.RequestID` and `kit.AccessLog` middleware. A service only writes its own routes, readiness check and startup. Never copy these into a service.
+- **Every service is built on `pkg/kit` and [Typhon](https://github.com/monzo/typhon):** `kit.Main`, `kit.LoadConfig` (embed `kit.Config` for extra settings), `kit.NewLogger` and `kit.Serve`. Routes are a `typhon.Router` of `typhon.Service` handlers, and `kit.Handler` wraps it in the shared filters: request IDs, access logs, metrics, error cleaning and panic recovery. Handlers fail by returning a [terrors](https://github.com/monzo/terrors) error (`terrors.BadRequest("holder_name", "…", nil)`, `terrors.NotFound(…)`), and read JSON bodies with `kit.DecodeJSON`, which is strict: one JSON object, no unknown fields, at most 16 KB (`kit.Handler` caps every body), and every failure is a 400 with its own code. Any other error is logged and hidden from the caller as a 500, and a caller that hangs up gets 499. A service only writes its own routes, readiness check and startup. Never copy the filters into a service. Every service has a `TestConformance` that runs `kittest.Conformance` on its real handler, and its own tests cover only what's its own.
 - **Config from environment variables** (12-factor). No config files baked into images.
 - **Logs are structured JSON to stdout** via `log/slog`. Never log secrets or full card or account numbers.
-- **Metrics come from `pkg/obs`.** Every HTTP service serves `GET /metrics` and wraps its mux in `obs.HTTPMetrics.Middleware`. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/{id}`), never raw paths, IDs, emails or amounts.
+- **Metrics come from `pkg/obs`.** `kit.Handler` serves `GET /metrics` and records HTTP metrics for every service. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/:id`), never raw paths, IDs, emails or amounts.
 - **Kubernetes-ready from day one:** expose `/healthz` (liveness) and `/readyz` (readiness), shut down gracefully on `SIGTERM`, and keep no local file state.
-- **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients.
+- **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients. Never put secrets, tokens or personal details in an error: when a request fails, `pkg/kit` logs the full error, because it's the only record of why.
+- **Secrets are `kit.Secret`.** Every secret read from the environment (like `DATABASE_URL`) is stored as a `kit.Secret`. It prints as `xxxxx` everywhere (fmt, slog, errors, JSON), so logging a config can't leak it. Call `.Reveal()` only where the value is used, such as `db.Open`, never to log or return it.
+- **terrors travel between services.** Typhon sends an error's code, message and params to the calling service ([ADR-0007](docs/adr/0007-build-services-on-typhon-and-terrors.md)). Never put secrets, passwords, tokens or personal details (names, emails, full account numbers) in a terror's message or params. To check a terror that may be wrapped, find it with `errors.As(err, &terr)` first: `terrors.PrefixMatches(err, …)` and `terrors.Is` don't look inside `fmt.Errorf("…: %w")`.
 - **Tests:** table-driven where it fits. Standard library `testing` first. Tests that need a real dependency (Postgres) go in `*_integration_test.go` files tagged `//go:build integration`, and start it with testcontainers. `make check` skips them; `make test-integration` and CI run them.
 - **Databases:** connect with `db.Open` from `pkg/db`, using `DATABASE_URL` from the environment. Never build connection strings by hand, and never log `DATABASE_URL` itself (errors from `db.Open` are safe to log).
 - **Migrations** are goose SQL files (`<version>_<name>.sql`) embedded in the service and applied at startup with `db.Migrate`, before the service reports ready ([ADR-0005](docs/adr/0005-run-migrations-at-startup-behind-an-advisory-lock.md)). Every migration must work with the code that is already running (expand, then contract). Never edit a migration that has been applied anywhere; fix forward with a new one.

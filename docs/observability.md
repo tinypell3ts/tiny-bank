@@ -17,7 +17,8 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 0 | JSON logs, `/healthz` + `/readyz` |
 | 1 | Kubernetes liveness/readiness probes using those endpoints, logs via `kubectl logs` and the Tilt dashboard ✅ |
 | 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard ✅ |
-| 6 | Request ID in gRPC metadata, logging/metrics interceptors |
+| 5.5 | Shared Typhon filters in `pkg/kit` for request IDs, access logs and RED metrics, applied to every service |
+| 6 | Request ID passed on to downstream services in Typhon client calls, so one ID follows a request across services |
 | 7 | Ledger audit trail and business metrics |
 | 8 | OpenTelemetry tracing across services |
 | 10–11 | Trace context in Kafka headers, outbox backlog and consumer lag metrics |
@@ -46,7 +47,7 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 
   One histogram covers rate, errors and duration, because every histogram already counts its observations. A separate request counter would double the series for no extra answers. Metric and label names follow the [OpenTelemetry HTTP semantic conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/), so dashboards and queries keep working when OpenTelemetry arrives in Phase 8.
 
-  `http_route` is the matched route pattern (`/accounts/{id}`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`. Methods outside the standard set (`GET`, `POST`, …) are labelled `_OTHER`, so a caller can't create new series by inventing methods. The status code is the final one the client received: informational `1xx` responses and ignored second `WriteHeader` calls don't count.
+  `http_route` is the Typhon route pattern that matched (`/accounts/:id`), never the raw path, so the number of time series stays small. Requests that match no route are labelled `unmatched`. Methods outside the standard set (`GET`, `POST`, …) are labelled `_OTHER`, so a caller can't create new series by inventing methods. The status code is the one the caller received, including the 500 for a handler that panicked (still labelled with its route) and 499 for a caller that hung up. `kit.Handler` records all of this, so services never touch metrics for HTTP.
 
   Example PromQL queries, for Prometheus at localhost:9090 (add `job="hello"` to pick one service):
 

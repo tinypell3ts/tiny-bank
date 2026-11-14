@@ -14,7 +14,11 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/monzo/typhon"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // fakeAccounts keeps accounts in memory. Create applies the same rules as the
@@ -48,34 +52,46 @@ func (f *fakeAccounts) Get(_ context.Context, id uuid.UUID) (Account, error) {
 	}
 	acc, ok := f.byID[id]
 	if !ok {
-		return Account{}, ErrNotFound
+		return Account{}, errNotFound()
 	}
 	return acc, nil
 }
 
-// serve sends one request to the API backed by accounts, and returns the
-// response and anything logged.
+// apiHandler is the account API as it runs in production: its routes behind
+// kit.Handler's filters. It returns the handler and what it logs.
+func apiHandler(accounts Accounts) (http.Handler, *bytes.Buffer) {
+	var logs bytes.Buffer
+	router := typhon.Router{}
+	RegisterRoutes(&router, accounts)
+	return kit.Handler(slog.New(slog.NewJSONHandler(&logs, nil)), obs.NewRegistry(), &router), &logs
+}
+
+// serve sends one request (JSON for POSTs) and returns the response and logs.
 func serve(t *testing.T, accounts Accounts, method, path, body string) (*httptest.ResponseRecorder, string) {
 	t.Helper()
-	var logs bytes.Buffer
-	mux := http.NewServeMux()
-	RegisterRoutes(mux, accounts, slog.New(slog.NewJSONHandler(&logs, nil)))
+	h, logs := apiHandler(accounts)
 	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 	return rec, logs.String()
 }
 
-func errorOf(t *testing.T, rec *httptest.ResponseRecorder) string {
+// terror is the error body Typhon sends: the terror's code and message.
+type terror struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func errorOf(t *testing.T, rec *httptest.ResponseRecorder) terror {
 	t.Helper()
-	var body map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	var e terror
+	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
 		t.Fatalf("error body isn't JSON: %v: %s", err, rec.Body)
 	}
-	return body["error"]
+	return e
 }
 
 const custJSON = `"customer_id":"c0ffee00-0000-4000-8000-000000000001"`
@@ -101,41 +117,66 @@ func TestCreateAccount(t *testing.T) {
 
 func TestCreateAccountRejectsBadRequests(t *testing.T) {
 	tests := []struct {
-		name       string
-		body       string
-		wantStatus int
-		wantError  string
+		name     string
+		body     string
+		wantCode string // terror code
+		wantMsg  string // substring of the message
 	}{
-		{"not JSON", `customer_id=1`, 400, "must be a JSON object"},
-		{"empty body", ``, 400, "must be a JSON object"},
-		{"unknown field", `{` + custJSON + `,"holder_name":"Ada","currancy":"GBP"}`, 400, "must be a JSON object"},
-		{"trailing data", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}{"currency":"EUR"}`, 400, "must be a JSON object"},
-		{"trailing junk", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"} x`, 400, "must be a JSON object"},
-		{"customer ID upper case", `{"customer_id":"C0FFEE00-0000-4000-8000-000000000001","holder_name":"Ada","currency":"GBP"}`, 400, "customer_id must be a lower-case UUID"},
-		{"customer ID without dashes", `{"customer_id":"c0ffee0000004000800000000000001","holder_name":"Ada","currency":"GBP"}`, 400, "customer_id must be a lower-case UUID"},
-		{"customer not a UUID", `{"customer_id":"ada","holder_name":"Ada","currency":"GBP"}`, 400, "customer_id must be a lower-case UUID"},
-		{"missing customer", `{"holder_name":"Ada","currency":"GBP"}`, 400, "customer_id must be a lower-case UUID"},
-		{"unsupported currency", `{` + custJSON + `,"holder_name":"Ada","currency":"XYZ"}`, 400, "currency must be a supported"},
-		{"lower-case currency", `{` + custJSON + `,"holder_name":"Ada","currency":"gbp"}`, 400, "currency must be a supported"},
-		{"missing name", `{` + custJSON + `,"currency":"GBP"}`, 400, "holder name is required"},
-		{"control character in name", `{` + custJSON + `,"holder_name":"Ada\nLovelace","currency":"GBP"}`, 400, "control characters"},
-		{"too large", `{` + custJSON + `,"holder_name":"` + strings.Repeat("a", maxBodyBytes) + `","currency":"GBP"}`, 413, "too large"},
-		{"too large after a valid object", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}` + strings.Repeat(" ", maxBodyBytes), 413, "too large"},
+		{"not JSON", `customer_id=1`, "bad_request.invalid_json", "JSON object"},
+		{"null", `null`, "bad_request.invalid_json", "JSON object"},
+		{"empty body", ``, "bad_request.invalid_json", "JSON object"},
+		{"unknown field", `{` + custJSON + `,"holder_name":"Ada","currancy":"GBP"}`, "bad_request.invalid_json", `unknown field "currancy"`},
+		{"trailing data", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}{"currency":"EUR"}`, "bad_request.invalid_json", "single JSON object"},
+		{"trailing junk", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"} x`, "bad_request.invalid_json", "single JSON object"},
+		{"customer ID upper case", `{"customer_id":"C0FFEE00-0000-4000-8000-000000000001","holder_name":"Ada","currency":"GBP"}`, "bad_request.customer_id", "lower-case UUID"},
+		{"customer not a UUID", `{"customer_id":"ada","holder_name":"Ada","currency":"GBP"}`, "bad_request.customer_id", "lower-case UUID"},
+		{"missing customer", `{"holder_name":"Ada","currency":"GBP"}`, "bad_request.customer_id", "lower-case UUID"},
+		{"unsupported currency", `{` + custJSON + `,"holder_name":"Ada","currency":"XYZ"}`, "bad_request.currency", "supported ISO 4217"},
+		{"lower-case currency", `{` + custJSON + `,"holder_name":"Ada","currency":"gbp"}`, "bad_request.currency", "supported ISO 4217"},
+		{"missing name", `{` + custJSON + `,"currency":"GBP"}`, "bad_request.holder_name", "holder name is required"},
+		{"control character in name", `{` + custJSON + `,"holder_name":"Ada\nLovelace","currency":"GBP"}`, "bad_request.holder_name", "control characters"},
+		{"too large", `{` + custJSON + `,"holder_name":"` + strings.Repeat("a", kit.MaxBodyBytes) + `","currency":"GBP"}`, "bad_request.too_large", "too large"},
+		{"too large after a valid object", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}` + strings.Repeat(" ", kit.MaxBodyBytes), "bad_request.too_large", "too large"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec, _ := serve(t, newFake(), http.MethodPost, "/accounts", tt.body)
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d: %s", rec.Code, tt.wantStatus, rec.Body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
 			}
-			if got := errorOf(t, rec); !strings.Contains(got, tt.wantError) {
-				t.Errorf("error = %q, want it to contain %q", got, tt.wantError)
+			got := errorOf(t, rec)
+			if got.Code != tt.wantCode || !strings.Contains(got.Message, tt.wantMsg) {
+				t.Errorf("error = %+v, want code %q and a message containing %q", got, tt.wantCode, tt.wantMsg)
 			}
 			// The message is meant for the caller: never Go's internal wording.
-			if got := errorOf(t, rec); strings.Contains(got, "create account:") || strings.Contains(got, "json:") {
-				t.Errorf("error leaks internals: %q", got)
+			if strings.Contains(rec.Body.String(), "create account:") || strings.Contains(rec.Body.String(), "json:") {
+				t.Errorf("error leaks internals: %s", rec.Body)
 			}
 		})
+	}
+}
+
+func TestCreateAccountNeedsJSONContentType(t *testing.T) {
+	body := `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}`
+	for ct, wantStatus := range map[string]int{
+		"":                                  http.StatusBadRequest,
+		"text/plain":                        http.StatusBadRequest,
+		"application/x-www-form-urlencoded": http.StatusBadRequest,
+		"application/json; charset=utf-8":   http.StatusCreated, // parameters are fine
+	} {
+		h, _ := apiHandler(newFake())
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/accounts", strings.NewReader(body))
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != wantStatus {
+			t.Errorf("Content-Type %q: status = %d, want %d", ct, rec.Code, wantStatus)
+		}
+		if wantStatus == http.StatusBadRequest && errorOf(t, rec).Code != "bad_request.content_type" {
+			t.Errorf("Content-Type %q: error = %s", ct, rec.Body)
+		}
 	}
 }
 
@@ -179,30 +220,39 @@ func TestGetAccountOnlyAtItsCanonicalURL(t *testing.T) {
 	}
 }
 
-func TestCreateAccountNeedsJSONContentType(t *testing.T) {
-	body := `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}`
-	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded"} {
-		mux := http.NewServeMux()
-		RegisterRoutes(mux, newFake(), slog.New(slog.DiscardHandler))
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/accounts", strings.NewReader(body))
-		if ct != "" {
-			req.Header.Set("Content-Type", ct)
-		}
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnsupportedMediaType {
-			t.Errorf("Content-Type %q: status = %d, want 415", ct, rec.Code)
-		}
+func TestGetAccountNotFound(t *testing.T) {
+	// A malformed ID can't match any account, so it's a 404 like a missing one,
+	// never a 400 or a 500.
+	for _, id := range []string{
+		uuid.New().String(),     // well-formed, but no such account
+		"not-a-uuid",            // malformed
+		"%27%20OR%201%3D1%20--", // "' OR 1=1 --", URL-encoded
+	} {
+		t.Run(id, func(t *testing.T) {
+			rec, _ := serve(t, newFake(), http.MethodGet, "/accounts/"+id, "")
+			if got := errorOf(t, rec); rec.Code != http.StatusNotFound || got.Code != "not_found.account" || got.Message != "account not found" {
+				t.Errorf("status = %d, error %+v; want 404 not_found.account", rec.Code, got)
+			}
+		})
 	}
-	// Parameters such as charset are fine.
-	mux := http.NewServeMux()
-	RegisterRoutes(mux, newFake(), slog.New(slog.DiscardHandler))
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/accounts", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Errorf("application/json; charset=utf-8: status = %d, want 201", rec.Code)
+}
+
+func TestInternalErrorsAreLoggedNotShown(t *testing.T) {
+	broken := &fakeAccounts{err: errors.New("connection reset by 10.0.0.7")}
+	for _, req := range []struct{ method, path, body string }{
+		{http.MethodPost, "/accounts", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}`},
+		{http.MethodGet, "/accounts/" + uuid.New().String(), ""},
+	} {
+		rec, logs := serve(t, broken, req.method, req.path, req.body)
+		if rec.Code != http.StatusInternalServerError || errorOf(t, rec).Code != "internal_service" {
+			t.Errorf("%s %s: status %d, body %s; want 500 internal_service", req.method, req.path, rec.Code, rec.Body)
+		}
+		if strings.Contains(rec.Body.String(), "10.0.0.7") || strings.Contains(rec.Body.String(), "connection") {
+			t.Errorf("%s %s: response leaks the internal error: %s", req.method, req.path, rec.Body)
+		}
+		if !strings.Contains(logs, "connection reset by 10.0.0.7") {
+			t.Errorf("%s %s: internal error should be logged, got: %s", req.method, req.path, logs)
+		}
 	}
 }
 
@@ -226,23 +276,20 @@ func TestClientGoneIsNotAServerError(t *testing.T) {
 		{http.MethodGet, "/accounts/" + uuid.New().String(), ""},
 	} {
 		t.Run(req.method, func(t *testing.T) {
-			var logs bytes.Buffer
-			mux := http.NewServeMux()
-			RegisterRoutes(mux, ctxAccounts{}, slog.New(slog.NewJSONHandler(&logs, nil)))
-
+			h, logs := apiHandler(ctxAccounts{})
 			// The caller hangs up mid-request: its context is cancelled.
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 			r := httptest.NewRequestWithContext(ctx, req.method, req.path, strings.NewReader(req.body))
 			r.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, r)
+			h.ServeHTTP(rec, r)
 
-			if rec.Code != statusClientClosedRequest {
-				t.Errorf("status = %d, want %d", rec.Code, statusClientClosedRequest)
+			if rec.Code != 499 {
+				t.Errorf("status = %d, want 499", rec.Code)
 			}
-			if strings.Contains(logs.String(), `"level":"ERROR"`) || !strings.Contains(logs.String(), "client went away") {
-				t.Errorf("want an info line, not an error, got: %s", logs.String())
+			if strings.Contains(logs.String(), `"level":"ERROR"`) {
+				t.Errorf("a cancelled request shouldn't log an error:\n%s", logs)
 			}
 		})
 	}
@@ -258,45 +305,10 @@ func TestCanceledInsideTheServiceIsAServerError(t *testing.T) {
 	}
 }
 
-func TestGetAccountNotFound(t *testing.T) {
-	// A malformed ID can't match any account, so it's a 404 like a missing one,
-	// never a 400 or a 500 (carried over from the store's old string-ID tests).
-	for _, id := range []string{
-		uuid.New().String(),     // well-formed, but no such account
-		"not-a-uuid",            // malformed
-		"%27%20OR%201%3D1%20--", // "' OR 1=1 --", URL-encoded
-	} {
-		t.Run(id, func(t *testing.T) {
-			rec, _ := serve(t, newFake(), http.MethodGet, "/accounts/"+id, "")
-			if rec.Code != http.StatusNotFound || errorOf(t, rec) != "account not found" {
-				t.Errorf("status = %d, body %s; want 404 account not found", rec.Code, rec.Body)
-			}
-		})
-	}
-}
-
-func TestInternalErrorsAreLoggedNotShown(t *testing.T) {
-	broken := &fakeAccounts{err: errors.New("connection reset: password=s3cret")}
-	for _, req := range []struct{ method, path, body string }{
-		{http.MethodPost, "/accounts", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}`},
-		{http.MethodGet, "/accounts/" + uuid.New().String(), ""},
-	} {
-		rec, logs := serve(t, broken, req.method, req.path, req.body)
-		if rec.Code != http.StatusInternalServerError || errorOf(t, rec) != "something went wrong" {
-			t.Errorf("%s %s: status %d, body %s; want 500 something went wrong", req.method, req.path, rec.Code, rec.Body)
-		}
-		if strings.Contains(rec.Body.String(), "s3cret") || strings.Contains(rec.Body.String(), "connection") {
-			t.Errorf("%s %s: response leaks the internal error: %s", req.method, req.path, rec.Body)
-		}
-		if !strings.Contains(logs, "connection reset") {
-			t.Errorf("%s %s: internal error should be logged, got: %s", req.method, req.path, logs)
-		}
-	}
-}
-
 func TestWrongMethod(t *testing.T) {
+	// Typhon's router has no route for DELETE, so it's a 404 (not 405).
 	rec, _ := serve(t, newFake(), http.MethodDelete, "/accounts/"+uuid.New().String(), "")
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
