@@ -6,7 +6,6 @@ package obs
 import (
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -66,8 +65,8 @@ func NewHTTPMetrics(reg prometheus.Registerer) *HTTPMetrics {
 }
 
 // Track starts recording one request and returns a function to call when it
-// ends, with its method, route pattern and status. Transports that don't use
-// http.ServeMux (Typhon, in pkg/kit) record through it; Middleware uses it too.
+// ends, with its method, route pattern and status. kit.Handler calls it for
+// every request, so services never record HTTP metrics themselves.
 //
 // route must be the pattern that matched, like "/accounts/:id", never the raw
 // URL path. Raw paths would create one time series per account ID and
@@ -83,35 +82,11 @@ func (m *HTTPMetrics) Track() (done func(method, route string, status int)) {
 	}
 }
 
-// Middleware records metrics for every request handled by next, which must
-// be (or wrap) an http.ServeMux: the route label is the mux pattern that matched.
-func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		done := m.Track()
-		rec := NewStatusRecorder(w)
-		// Deferred, so a panicking handler still ends its request in the metrics
-		// (as a 500) and the active-requests gauge comes back down. The panic is
-		// re-raised for net/http to handle as before.
-		defer func() {
-			if p := recover(); p != nil {
-				done(r.Method, r.Pattern, http.StatusInternalServerError)
-				panic(p)
-			}
-			// The mux sets r.Pattern on this same request while routing it.
-			done(r.Method, r.Pattern, rec.Status())
-		}()
-		next.ServeHTTP(rec, r)
-	})
-}
-
-// routeOf turns a mux pattern like "GET /accounts/{id}" into "/accounts/{id}".
-// The method is already its own label.
+// routeOf is the route label: the pattern that matched, or "unmatched" when
+// nothing did (a 404), so unknown paths never become labels.
 func routeOf(pattern string) string {
 	if pattern == "" {
 		return "unmatched"
-	}
-	if _, path, found := strings.Cut(pattern, " "); found {
-		return path
 	}
 	return pattern
 }
@@ -132,47 +107,3 @@ func methodOf(method string) string {
 	}
 	return "_OTHER"
 }
-
-// StatusRecorder wraps an http.ResponseWriter and remembers the final status
-// code actually sent to the client, for metrics and access logs.
-//
-// "Final" matters: a handler may send informational 1xx responses (like
-// 103 Early Hints) before the real one, and net/http ignores any WriteHeader
-// after the first final status. If the handler never calls WriteHeader, the
-// status is the implicit 200 that net/http sends.
-type StatusRecorder struct {
-	http.ResponseWriter
-	status int // 0 until a final status is sent
-}
-
-// NewStatusRecorder wraps w.
-func NewStatusRecorder(w http.ResponseWriter) *StatusRecorder {
-	return &StatusRecorder{ResponseWriter: w}
-}
-
-// Status returns the final status code sent, or 200 if nothing was written yet.
-func (r *StatusRecorder) Status() int {
-	if r.status == 0 {
-		return http.StatusOK
-	}
-	return r.status
-}
-
-// WriteHeader records the first final (non-1xx) status and passes the call on.
-func (r *StatusRecorder) WriteHeader(code int) {
-	if r.status == 0 && code >= http.StatusOK {
-		r.status = code
-	}
-	r.ResponseWriter.WriteHeader(code)
-}
-
-// Write records the implicit 200 when the body starts without a WriteHeader.
-func (r *StatusRecorder) Write(b []byte) (int, error) {
-	if r.status == 0 {
-		r.status = http.StatusOK
-	}
-	return r.ResponseWriter.Write(b)
-}
-
-// Unwrap lets http.ResponseController reach the underlying writer (e.g. to flush).
-func (r *StatusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }

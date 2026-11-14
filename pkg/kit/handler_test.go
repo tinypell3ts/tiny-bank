@@ -2,6 +2,7 @@ package kit
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,22 @@ func testServer(t *testing.T) (http.Handler, *bytes.Buffer) {
 		return typhon.Response{Error: terrors.InternalService("db", "database unavailable", nil)}
 	})
 	router.GET("/panic", func(req typhon.Request) typhon.Response { panic("boom: secret detail") })
+	router.GET("/wait", func(req typhon.Request) typhon.Response {
+		<-req.Done() // like a database query cut short when the caller leaves
+		return typhon.Response{Error: fmt.Errorf("get thing: %w", req.Err())}
+	})
+	router.POST("/things", func(req typhon.Request) typhon.Response {
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := DecodeJSON(req, &body); err != nil {
+			return typhon.Response{Error: err}
+		}
+		return req.Response(body)
+	})
+	router.GET("/cancelled-inside", func(req typhon.Request) typhon.Response {
+		return typhon.Response{Error: fmt.Errorf("get thing: %w", context.Canceled)}
+	})
 	h := Handler(slog.New(slog.NewJSONHandler(&logs, nil)), obs.NewRegistry(), &router)
 	return h, &logs
 }
@@ -141,6 +158,10 @@ func TestRequestIDFilter(t *testing.T) {
 		t.Errorf("access log missing the request ID:\n%s", logs)
 	}
 
+	rec = do(t, h, "/healthz", nil)
+	if got := rec.Header().Get(RequestIDHeader); !validRequestID(got) {
+		t.Errorf("a request without an ID should get a new valid one, got %q", got)
+	}
 	rec = do(t, h, "/healthz", http.Header{RequestIDHeader: {"bad\nid"}})
 	if got := rec.Header().Get(RequestIDHeader); !validRequestID(got) || got == "bad\nid" {
 		t.Errorf("invalid caller ID should be replaced, got %q", got)
@@ -170,12 +191,20 @@ func TestMetricsUseRoutePatterns(t *testing.T) {
 	do(t, h, "/things/2", nil)
 	do(t, h, "/missing", nil)
 	do(t, h, "/no-such-route", nil)
+	do(t, h, "/panic", nil)
+	wrongMethod := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/things/1", nil)
+	h.ServeHTTP(httptest.NewRecorder(), wrongMethod)
 
 	body := do(t, h, "/metrics", nil).Body.String()
 	for _, want := range []string{
 		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="200",http_route="/things/:id"} 2`,
 		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="404",http_route="/missing"} 1`,
 		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="404",http_route="unmatched"} 1`,
+		// Typhon's router has no 405: a route with the wrong method matches nothing.
+		`http_server_request_duration_seconds_count{http_request_method="POST",http_response_status_code="404",http_route="unmatched"} 1`,
+		// A panic still ends its request in the metrics, and the gauge comes back down.
+		`http_server_request_duration_seconds_count{http_request_method="GET",http_response_status_code="500",http_route="/panic"} 1`,
+		"http_server_active_requests 0",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics missing %s", want)
@@ -186,5 +215,82 @@ func TestMetricsUseRoutePatterns(t *testing.T) {
 	}
 	if strings.Contains(body, `http_route="/metrics"`) {
 		t.Error("Prometheus scrapes shouldn't be counted as traffic")
+	}
+}
+
+func TestCallerGoneIs499NotAnError(t *testing.T) {
+	h, logs := testServer(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // the caller hung up
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/wait", nil))
+
+	if rec.Code != statusClientClosedRequest {
+		t.Errorf("status = %d, want 499", rec.Code)
+	}
+	if strings.Contains(logs.String(), `"level":"ERROR"`) {
+		t.Errorf("a caller leaving isn't a server error, but it was logged as one:\n%s", logs)
+	}
+	if !strings.Contains(logs.String(), "request cancelled before it finished") {
+		t.Errorf("the cancellation should be logged at info:\n%s", logs)
+	}
+}
+
+func TestCancelledInsideIsAServerError(t *testing.T) {
+	// The caller is still waiting, but something inside returned
+	// context.Canceled. Only the request's own context decides 499.
+	h, logs := testServer(t)
+	if rec := do(t, h, "/cancelled-inside", nil); rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(logs.String(), `"level":"ERROR"`) {
+		t.Errorf("want an error log:\n%s", logs)
+	}
+}
+
+func TestHandlerCapsRequestBodies(t *testing.T) {
+	h, logs := testServer(t)
+	for size, want := range map[int]int{
+		MaxBodyBytes:     http.StatusOK,
+		MaxBodyBytes + 1: http.StatusBadRequest,
+		4 * MaxBodyBytes: http.StatusBadRequest,
+	} {
+		body := `{"name":"` + strings.Repeat("a", size-len(`{"name":""}`)) + `"}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/things", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("%d-byte body: status %d, want %d: %s", size, rec.Code, want, rec.Body)
+		}
+		if want == http.StatusBadRequest && !strings.Contains(rec.Body.String(), "bad_request.too_large") {
+			t.Errorf("%d-byte body: want bad_request.too_large, got %s", size, rec.Body)
+		}
+	}
+	if strings.Contains(logs.String(), `"level":"ERROR"`) {
+		t.Errorf("a too-large body is the caller's fault, not a server error:\n%s", logs)
+	}
+}
+
+func TestHandlerClosesTheConnectionAfterAHugeBody(t *testing.T) {
+	// http.MaxBytesReader tells net/http to close the connection, rather than
+	// read and discard the rest of a huge body to reuse it.
+	h, _ := testServer(t)
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+
+	body := `{"name":"` + strings.Repeat("a", 4*MaxBodyBytes) + `"}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/things", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	rsp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rsp.Body.Close() }()
+	if rsp.StatusCode != http.StatusBadRequest || !rsp.Close {
+		t.Errorf("status %d, Connection: close %v; want 400 and the connection closed", rsp.StatusCode, rsp.Close)
 	}
 }

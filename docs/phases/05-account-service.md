@@ -1,5 +1,7 @@
 # Phase 5 — The account service
 
+> Phase 5.5 moved this service onto Typhon and terrors: errors are now terrors (`bad_request.holder_name`, `not_found.account`), the strict-input checks live in `kit.DecodeJSON`, and a wrong content type or a too-large body is a 400 with its own code instead of 415 or 413. This page records Phase 5 as it was built.
+
 ## What we built
 
 - **The account service** (`cmd/account` for wiring, `services/account` for the code). It opens accounts and looks them up, and stores them in its own Postgres database, `account-db`.

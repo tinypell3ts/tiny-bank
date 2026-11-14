@@ -258,7 +258,7 @@ func TestAccountAPIEndToEnd(t *testing.T) {
 
 	// Metrics label the route pattern, never the account ID (cardinality).
 	_, metrics := get(t, base+"/metrics")
-	if !strings.Contains(metrics, `http_route="/accounts/{id}"`) || !strings.Contains(metrics, `http_route="/accounts"`) {
+	if !strings.Contains(metrics, `http_route="/accounts/:id"`) || !strings.Contains(metrics, `http_route="/accounts"`) {
 		t.Error("/metrics should count requests by route pattern")
 	}
 	if strings.Contains(metrics, created.ID) {

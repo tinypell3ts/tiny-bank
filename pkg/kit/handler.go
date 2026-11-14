@@ -26,24 +26,27 @@ import (
 //   - Typhon's ErrorFilter: turns a returned error into a response with the
 //     right status, sending the terror's code and message to the caller
 //   - clean errors: send only a terror's code, message and params (no stack
-//     traces); log anything internal, and hide errors that aren't terrors
+//     traces); log anything internal, and hide errors that aren't terrors;
+//     answer 499 if the caller has already gone
 //   - recover: a panic becomes a 500 instead of crashing the process
 //
 // GET /metrics is served next to the router, outside the filters, so
-// Prometheus scrapes aren't counted as traffic.
+// Prometheus scrapes aren't counted as traffic. Every request body is capped
+// at MaxBodyBytes with http.MaxBytesReader, which also tells net/http to
+// close the connection rather than read the rest of a huge body.
 func Handler(logger *slog.Logger, reg *prometheus.Registry, router *typhon.Router) http.Handler {
 	metrics := obs.NewHTTPMetrics(reg)
 	svc := router.Serve().
 		Filter(recoverFilter(logger)).
 		Filter(cleanErrors(logger)).
 		Filter(typhon.ErrorFilter).
-		Filter(metricsFilter(metrics)).
+		Filter(metricsFilter(metrics, router)).
 		Filter(accessLogFilter(logger)).
 		Filter(requestIDFilter)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", obs.Handler(reg))
-	mux.Handle("/", typhon.HttpHandler(svc))
+	mux.Handle("/", limitBody(typhon.HttpHandler(svc)))
 	return mux
 }
 
@@ -55,8 +58,9 @@ func Health(req typhon.Request) typhon.Response {
 	return req.Response(map[string]string{"status": "ok"})
 }
 
-// requestIDFilter gives every request an ID (see RequestID) and stores it in
-// the request's context, where RequestIDFrom finds it.
+// requestIDFilter gives every request an ID and stores it in the request's
+// context, where RequestIDFrom finds it. It reuses the caller's X-Request-Id
+// if validRequestID accepts it, and otherwise makes a new one.
 func requestIDFilter(req typhon.Request, next typhon.Service) typhon.Response {
 	id := req.Header.Get(RequestIDHeader)
 	if !validRequestID(id) {
@@ -86,10 +90,13 @@ func accessLogFilter(logger *slog.Logger) typhon.Filter {
 	}
 }
 
-// metricsFilter records RED metrics. The route is the pattern Typhon's router
-// matched ("/accounts/:id"), which it records on the request it passes to the
-// handler; the response carries that request back out.
-func metricsFilter(m *obs.HTTPMetrics) typhon.Filter {
+// metricsFilter records RED metrics. The route label is the pattern the
+// router matched ("/accounts/:id"), or "" (recorded as "unmatched") when none
+// did. The router records it on the request it hands the handler, and the
+// response carries that request back out. A response built from the
+// unrouted request, like the 500 from recoverFilter after a panic, doesn't
+// carry it, so only then does it ask the router to match the path again.
+func metricsFilter(m *obs.HTTPMetrics, router *typhon.Router) typhon.Filter {
 	return func(req typhon.Request, next typhon.Service) typhon.Response {
 		done := m.Track()
 		rsp := next(req)
@@ -97,9 +104,22 @@ func metricsFilter(m *obs.HTTPMetrics) typhon.Filter {
 		if rsp.Request != nil {
 			route, _ = typhon.RequestPatternFromContext(rsp.Request.Context)
 		}
+		if route == "" {
+			route = router.Pattern(req)
+		}
 		done(req.Method, route, statusOf(rsp))
 		return rsp
 	}
+}
+
+// limitBody caps every request body at MaxBodyBytes (see Handler).
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // cleanErrors makes the error Typhon's ErrorFilter sends to the caller safe
@@ -123,6 +143,15 @@ func cleanErrors(logger *slog.Logger) typhon.Filter {
 		rsp := next(req)
 		if rsp.Error == nil {
 			return rsp
+		}
+		// The caller hung up (or the server's shutdown deadline passed): nobody
+		// is waiting for this response, so it isn't a server failure. It checks
+		// the request's own context, not the error, so a context.Canceled from
+		// inside the service while the caller is still waiting stays a 500.
+		if req.Err() != nil { // typhon.Request embeds its context.Context
+			logger.InfoContext(req.Context, "request cancelled before it finished",
+				"request_id", RequestIDFrom(req.Context))
+			return typhon.NewResponseWithCode(req, statusClientClosedRequest)
 		}
 		var terr *terrors.Error
 		if !errors.As(rsp.Error, &terr) {
@@ -164,6 +193,10 @@ func recoverFilter(logger *slog.Logger) typhon.Filter {
 		return next(req)
 	}
 }
+
+// statusClientClosedRequest is nginx's convention for "the caller went away
+// first". It's a 4xx, so metrics don't count it as a server error.
+const statusClientClosedRequest = 499
 
 // statusOf is the status a response will be sent with: 200 if nothing else
 // was set, as net/http does.

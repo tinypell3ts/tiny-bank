@@ -7,28 +7,24 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/monzo/typhon"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
-	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 	"github.com/tinypell3ts/tiny-bank/services/account"
 )
 
-// newHandler wires routes and middleware, outermost first:
-//   - request ID, so everything after it can use the ID
-//   - access log, one line per request
-//   - metrics, directly around the mux so it can read the matched route
+// newHandler builds the account service's routes on Typhon. kit.Handler adds
+// the shared filters (request IDs, access logs, metrics, error handling) and
+// GET /metrics.
 func newHandler(logger *slog.Logger, ready *atomic.Bool, reg *prometheus.Registry,
 	database pinger, accounts account.Accounts,
 ) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", kit.Healthz) // liveness never checks the database
-	mux.HandleFunc("GET /readyz", handleReadyz(ready, database))
-	mux.Handle("GET /metrics", obs.Handler(reg)) // scraped by Prometheus
-	account.RegisterRoutes(mux, accounts, logger)
-
-	metrics := obs.NewHTTPMetrics(reg)
-	return kit.RequestID(kit.AccessLog(logger, metrics.Middleware(mux)))
+	router := typhon.Router{}
+	router.GET("/healthz", kit.Health) // liveness never checks the database
+	router.GET("/readyz", handleReadyz(ready, database))
+	account.RegisterRoutes(&router, accounts)
+	return kit.Handler(logger, reg, &router)
 }
 
 // pinger is the part of the database pool readiness needs. It's an interface so
@@ -43,20 +39,18 @@ const readyPingTimeout = 2 * time.Second
 // handleReadyz is the readiness check: "send me traffic". It fails while
 // shutting down, or when the database doesn't answer. Kubernetes then stops
 // routing to this pod but doesn't restart it, and routes again once it recovers.
-func handleReadyz(ready *atomic.Bool, database pinger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func handleReadyz(ready *atomic.Bool, database pinger) typhon.Service {
+	return func(req typhon.Request) typhon.Response {
 		if !ready.Load() {
-			kit.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready"})
-			return
+			return req.ResponseWithCode(map[string]string{"status": "not ready"}, http.StatusServiceUnavailable)
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), readyPingTimeout)
+		ctx, cancel := context.WithTimeout(req.Context, readyPingTimeout)
 		defer cancel()
 		if err := database.Ping(ctx); err != nil {
 			// The probe's caller is the kubelet, but keep the reason generic anyway:
 			// internal errors never go to clients.
-			kit.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "database unavailable"})
-			return
+			return req.ResponseWithCode(map[string]string{"status": "database unavailable"}, http.StatusServiceUnavailable)
 		}
-		kit.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return req.Response(map[string]string{"status": "ok"})
 	}
 }

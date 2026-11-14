@@ -1,13 +1,14 @@
 package account
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 	"uuid"
+
+	"github.com/monzo/terrors"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
@@ -32,25 +33,21 @@ type Status string
 
 const StatusOpen Status = "open"
 
-var (
-	// ErrNotFound means there is no account with that ID.
-	ErrNotFound = errors.New("account not found")
-	// ErrInvalid means a request to open an account broke one of the rules
-	// below. Validate returns a *ValidationError, which matches it with
-	// errors.Is. Show callers its Reason, never err.Error(): wrapping adds
-	// internal context such as "create account:".
-	ErrInvalid = errors.New("invalid account")
-)
+// invalid returns the error for a request that broke one of the rules below:
+// a terrors bad_request, coded by the field (bad_request.holder_name), with a
+// message that's safe to show the caller. Typhon sends both to the caller as
+// a 400.
+func invalid(field, message string) error { return terrors.BadRequest(field, message, nil) }
 
-// ValidationError says which rule a request broke. Reason is safe to show the caller.
-type ValidationError struct{ Reason string }
-
-func (e *ValidationError) Error() string { return "invalid account: " + e.Reason }
-
-// Is makes errors.Is(err, ErrInvalid) true for every ValidationError.
-func (e *ValidationError) Is(target error) bool { return target == ErrInvalid }
-
-func invalid(reason string) error { return &ValidationError{Reason: reason} }
+// errNotFound is the error for an account that doesn't exist: a 404.
+//
+// It's built without a stack trace. terrors' constructors capture one, which
+// is worth it for a fault but not for an expected answer like this, given on
+// every lookup of a missing or malformed ID. It's a new value each time, so
+// nothing can change a shared one.
+func errNotFound() error {
+	return &terrors.Error{Code: terrors.ErrNotFound + ".account", Message: "account not found", Params: map[string]string{}}
+}
 
 // maxHolderNameLen matches the accounts table's check. It counts characters,
 // not bytes, like Postgres's length().
@@ -69,27 +66,27 @@ type NewRequest struct {
 func (r NewRequest) Validate() (NewRequest, error) {
 	if r.CustomerID == uuid.Nil() {
 		// The type guarantees it's a well-formed UUID; the all-zero one means "not set".
-		return NewRequest{}, invalid("customer ID is required")
+		return NewRequest{}, invalid("customer_id", "customer ID is required")
 	}
 	if !utf8.ValidString(r.HolderName) {
 		// Postgres would refuse the bytes with an encoding error; say so clearly instead.
-		return NewRequest{}, invalid("holder name must be valid UTF-8")
+		return NewRequest{}, invalid("holder_name", "holder name must be valid UTF-8")
 	}
 	r.HolderName = strings.TrimSpace(r.HolderName)
 	switch n := utf8.RuneCountInString(r.HolderName); {
 	case n == 0:
-		return NewRequest{}, invalid("holder name is required")
+		return NewRequest{}, invalid("holder_name", "holder name is required")
 	case n > maxHolderNameLen:
-		return NewRequest{}, invalid(fmt.Sprintf("holder name must be at most %d characters", maxHolderNameLen))
+		return NewRequest{}, invalid("holder_name", fmt.Sprintf("holder name must be at most %d characters", maxHolderNameLen))
 	}
 	if strings.ContainsFunc(r.HolderName, unicode.IsControl) {
 		// Newlines, tabs and similar have no place in a name and could break logs.
 		// Display tricks like right-to-left overrides are handled where names
 		// are shown, by isolating user text, not by a list of banned characters.
-		return NewRequest{}, invalid("holder name must not contain control characters")
+		return NewRequest{}, invalid("holder_name", "holder name must not contain control characters")
 	}
 	if r.Currency == (money.Currency{}) {
-		return NewRequest{}, invalid("currency is required")
+		return NewRequest{}, invalid("currency", "currency is required")
 	}
 	return r, nil
 }

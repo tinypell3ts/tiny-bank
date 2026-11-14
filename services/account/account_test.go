@@ -6,6 +6,8 @@ import (
 	"testing"
 	"uuid"
 
+	"github.com/monzo/terrors"
+
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -38,9 +40,9 @@ func TestNewRequestValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := tt.req.Validate()
 			if tt.wantErr != "" {
-				var ve *ValidationError
-				if !errors.Is(err, ErrInvalid) || !errors.As(err, &ve) || !strings.Contains(ve.Reason, tt.wantErr) {
-					t.Fatalf("err = %v, want a ValidationError whose Reason contains %q", err, tt.wantErr)
+				var terr *terrors.Error
+				if !errors.As(err, &terr) || !terr.PrefixMatches(terrors.ErrBadRequest) || !strings.Contains(terr.Message, tt.wantErr) {
+					t.Fatalf("err = %v, want a terrors bad_request whose message contains %q", err, tt.wantErr)
 				}
 				return
 			}
@@ -51,5 +53,20 @@ func TestNewRequestValidate(t *testing.T) {
 				t.Errorf("got %+v, want name %q and currency %v", got, tt.wantName, tt.req.Currency)
 			}
 		})
+	}
+}
+
+func TestErrNotFoundIsAPlainNotFound(t *testing.T) {
+	var terr *terrors.Error
+	if err := errNotFound(); !errors.As(err, &terr) || !terr.PrefixMatches(terrors.ErrNotFound) || terr.Code != "not_found.account" {
+		t.Fatalf("errNotFound() = %v, want not_found.account", err)
+	}
+	if len(terr.StackFrames) != 0 {
+		t.Error("errNotFound shouldn't pay for a stack trace: a missing account is an expected answer")
+	}
+	// A new value each time: changing one can't change the next.
+	terr.Message = "changed"
+	if errors.As(errNotFound(), &terr); terr.Message != "account not found" {
+		t.Error("errNotFound must return a new value each time, so nothing can change a shared one")
 	}
 }
