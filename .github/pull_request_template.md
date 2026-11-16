@@ -31,6 +31,7 @@ Title format: Conventional Commits, e.g. "feat(ledger): record money moving betw
 
 - [ ] Tests added or updated for new code
 - [ ] Docs added or updated (README, `docs/`, ADR if a decision was made)
+- [ ] `docs/security.md` still matches: its controls, known gaps and the files they link to
 - [ ] `AGENTS.md` updated if layout, commands or conventions changed
 - [ ] Branch name follows Conventional Branch (`feature/…`, `fix/…`, `chore/…`)
 - [ ] Keeps it simple: no duplication across services (DRY), no cleverness (KISS), nothing built "just in case" (YAGNI)

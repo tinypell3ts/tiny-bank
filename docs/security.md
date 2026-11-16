@@ -1,6 +1,6 @@
 # Security
 
-What tiny-bank protects, where its trust boundaries are, which controls are in place and what each one stops, and the gaps that are still open. The rules every change must follow are in the root [AGENTS.md](../AGENTS.md#security). To report a vulnerability, see [SECURITY.md](../SECURITY.md).
+What tiny-bank protects, where its trust boundaries are, which controls are in place and what each one stops, and the gaps that are still open. The rules every change must follow are in the root [AGENTS.md](../AGENTS.md#security), including keeping this page true: a change that touches a control, a gap or a file they link to updates its row in the same PR. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 ## What we protect
 
@@ -39,7 +39,7 @@ flowchart LR
 | Database `CHECK` constraints repeat the key rules | Bad data, even if the code ever let it through | [migrations](../services/account/migrations/) |
 | Error cleaning: only a terror's code, message and params leave a service | Stack traces, file paths and raw database errors reaching callers | [handler.go](../pkg/kit/handler.go), `cleanErrors` |
 | Full errors logged with the request ID | Failures nobody can explain afterwards | [handler.go](../pkg/kit/handler.go) |
-| `kit.Secret` prints as `xxxxx` in `fmt`, `slog`, errors and JSON | A secret leaking because someone logged a config | [secret.go](../pkg/kit/secret.go) |
+| `kit.Secret` prints as `xxxxx` in `fmt`, `slog`, errors and JSON | A secret leaking because someone logged a config | [secret.go](../pkg/kit/secret.go), [ADR-0008](adr/0008-stop-secrets-where-they-enter.md) |
 | Caller request IDs reused only if short and plain (`A-Z a-z 0-9 - _`, at most 64) | Fake log lines injected through a header | [requestid.go](../pkg/kit/requestid.go) |
 | Metric labels use route patterns and a fixed set of methods | Account IDs in metrics, and callers creating unlimited time series | [handler.go](../pkg/kit/handler.go), [metrics.go](../pkg/obs/metrics.go) |
 | Panics recovered per request | One bad request crashing the service | [handler.go](../pkg/kit/handler.go) |
@@ -59,6 +59,7 @@ Each gap is known and has a plan. A change must not make one worse in the meanti
 | No NetworkPolicies: any pod can call any service | A compromised pod can reach every service | Phase 13: hardening |
 | No rate limits | One caller can use up a service's capacity | Phase 13: hardening |
 | Money doesn't move yet, so nothing is idempotent or audited | None yet | Phase 7: the ledger, with idempotency keys and an audit trail |
+| A revealed secret is an ordinary string again | Code that puts the value from `Reveal()`, or `string(s)`, into an error or log leaks it | Review: each `Reveal()` call is checked ([ADR-0008](adr/0008-stop-secrets-where-they-enter.md)) |
 | No TLS between services, or to Postgres | Traffic inside the local cluster is readable by anything on it | Not planned for the local cluster |
 | No automated check for known-vulnerable dependencies (such as `govulncheck`) | A vulnerable dependency could go unnoticed | Not planned yet |
 | Local Grafana lets anyone in as admin | Anyone with access to the developer's machine can change dashboards | Local only, by design: reachable only through `kubectl port-forward` |
