@@ -14,6 +14,7 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
+	"google.golang.org/protobuf/types/known/typepb"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
@@ -46,13 +47,11 @@ func testServer(t *testing.T) (http.Handler, *bytes.Buffer) {
 		return typhon.Response{Error: fmt.Errorf("get thing: %w", req.Err())}
 	})
 	router.POST("/things", func(req typhon.Request) typhon.Response {
-		var body struct {
-			Name string `json:"name"`
-		}
-		if err := DecodeJSON(req, &body); err != nil {
+		var body typepb.Type
+		if err := Decode(req, &body); err != nil {
 			return typhon.Response{Error: err}
 		}
-		return req.Response(body)
+		return Respond(req, &body, http.StatusOK)
 	})
 	router.GET("/cancelled-inside", func(req typhon.Request) typhon.Response {
 		return typhon.Response{Error: fmt.Errorf("get thing: %w", context.Canceled)}

@@ -21,7 +21,7 @@ flowchart LR
     notif --- ndb[(Postgres)]
 ```
 
-- **Services:** Go, built on [Typhon](https://github.com/monzo/typhon), an RPC framework that wraps `net/http`, with errors as [terrors](https://github.com/monzo/terrors). Services call each other over HTTP with protobuf contracts ([ADR-0007](adr/0007-build-services-on-typhon-and-terrors.md)).
+- **Services:** Go, built on [Typhon](https://github.com/monzo/typhon), an RPC framework that wraps `net/http`, with errors as [terrors](https://github.com/monzo/terrors). Each service's API is a protobuf contract in `proto/`, checked by `buf` for breaking changes, and services call each other over HTTP ([ADR-0007](adr/0007-build-services-on-typhon-and-terrors.md)).
 - **Runtime:** Docker on Kubernetes (kind locally). Services are deployed with one generic Helm chart, and Tilt runs the dev loop.
 - **Data:** one Postgres database per service, managed by CloudNativePG. Services never read another service's database.
 - **Events:** services publish through a transactional outbox to Kafka (Strimzi). Consumers deduplicate with an inbox table.
@@ -66,6 +66,6 @@ flowchart LR
 - **Dev loop:** Tilt rebuilds and redeploys on save.
 - **Monitoring:** kube-prometheus-stack (Prometheus Operator, Prometheus, Grafana, kube-state-metrics) in the `monitoring` namespace, installed by `make monitoring`. See [observability.md](observability.md).
 - **Postgres:** the [CloudNativePG](https://cloudnative-pg.io) operator in `cnpg-system`, installed by `make cnpg`. It turns each `Cluster` object into a running Postgres, with its users, passwords, storage and failover. A service turns on `database.enabled` in its values file, and the shared chart gives it its own Postgres `Cluster` (`<name>-db`), with its connection string passed in as `DATABASE_URL`.
-- **Account service:** `cmd/account` plus `services/account`. It connects to `account-db` and applies its migrations before serving, and offers `POST /accounts` and `GET /accounts/:id` on Typhon. It's internal only (ClusterIP, no sign-in) until the edge gateway.
+- **Account service:** `cmd/account` plus `services/account`. It connects to `account-db` and applies its migrations before serving, and offers `POST /accounts` and `GET /accounts/:id` on Typhon, as JSON following its contract, `proto/account/v1`. It's internal only (ClusterIP, no sign-in) until the edge gateway.
 
 See [ADR-0002](adr/0002-run-everything-in-docker-on-kubernetes.md) for why we run on Kubernetes, [ADR-0003](adr/0003-measure-services-with-prometheus-red-metrics.md) for how we measure services, and [deploy/AGENTS.md](../deploy/AGENTS.md) for the rules.

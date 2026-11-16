@@ -13,7 +13,8 @@ pkg/kit/
 ├── secret.go     # Secret: prints as xxxxx everywhere; Reveal() is the only way in
 ├── serve.go      # Serve: http.Server with graceful shutdown, cancelling requests left at the deadline
 ├── handler.go    # Handler: the filter chain, /metrics, the body cap; Health
-├── decode.go     # DecodeJSON: strict JSON bodies, every failure a coded 400
+├── decode.go     # Decode: a JSON body into a proto message, strictly, every failure a coded 400
+├── respond.go    # Respond, RespondCreated: a proto message as JSON with the proto field names
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
 └── kittest/      # Conformance: the checks every service's handler must pass
 ```
@@ -33,7 +34,7 @@ pkg/kit/
 
 ## Rules
 
-- **Grow only for a real consumer.** Add to the kit when a service needs it now, not because one might (the root tension rule). Typhon clients, for example, arrive with Phase 6, the first service-to-service call.
+- **Grow only for a real consumer.** Add to the kit when a service needs it now, not because one might (the root tension rule). Typhon clients and binary protobuf, for example, arrive with Phase 7, the first service-to-service call.
 - **Nothing service-specific.** The kit never imports `services/` or `cmd/`, and never knows a route, table or field name. If only one service needs it, it stays in that service.
 - **Callers see only what's meant for them.** Anything that reaches a caller is a terror's code, message and params, never a stack, a message chain, a file path or a non-terror error's text. `TestErrorsReachTheCallerSafely` and kittest's "unknown routes" check guard this: keep both passing.
 - **A caller's mistake is a 4xx, never a 5xx.** A bad body, a cut-off upload or a caller hanging up must not count against the service's error rate, or alerts fire for problems that aren't ours.

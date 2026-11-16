@@ -9,13 +9,14 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
+	"google.golang.org/protobuf/types/known/typepb"
 )
 
-type thing struct {
-	Name string `json:"name"`
-}
+// The tests decode into protobuf's own typepb.Type, so pkg/kit doesn't depend
+// on any service's contract. It has text (name), enum (syntax), repeated
+// message (fields) and message (source_context) fields.
 
-func jsonRequest(t *testing.T, contentType string, body io.Reader) typhon.Request {
+func bodyRequest(t *testing.T, contentType string, body io.Reader) typhon.Request {
 	t.Helper()
 	req := typhon.NewRequest(t.Context(), http.MethodPost, "/things", nil)
 	req.Body = nil
@@ -28,73 +29,66 @@ func jsonRequest(t *testing.T, contentType string, body io.Reader) typhon.Reques
 	return req
 }
 
-func TestDecodeJSON(t *testing.T) {
+func TestDecode(t *testing.T) {
+	limit := func(extra int) string { // a body of exactly MaxBodyBytes+extra bytes
+		return `{"name":"` + strings.Repeat("a", MaxBodyBytes+extra-len(`{"name":""}`)) + `"}`
+	}
 	tests := []struct {
 		name        string
 		contentType string
 		body        string
-		wantCode    string // terror code; empty means success
+		wantCode    string // empty means it decodes
+		wantMessage string // checked when set
 	}{
-		{"one object", "application/json", `{"name":"Ada"}`, ""},
-		{"media type parameters are fine", "application/json; charset=utf-8", `{"name":"Ada"}`, ""},
-		{"exactly the limit", "application/json", `{"name":"` + strings.Repeat("a", MaxBodyBytes-len(`{"name":""}`)) + `"}`, ""},
-		{"no Content-Type", "", `{"name":"Ada"}`, "bad_request.content_type"},
-		{"text/plain (a cross-site simple request)", "text/plain", `{"name":"Ada"}`, "bad_request.content_type"},
-		{"empty body", "application/json", ``, "bad_request.invalid_json"},
-		{"not JSON", "application/json", `name=Ada`, "bad_request.invalid_json"},
-		{"unknown field", "application/json", `{"name":"Ada","title":"Dr"}`, "bad_request.invalid_json"},
-		{"wrong type", "application/json", `{"name":7}`, "bad_request.invalid_json"},
-		{"two objects", "application/json", `{"name":"Ada"}{"name":"Bob"}`, "bad_request.invalid_json"},
-		{"trailing junk", "application/json", `{"name":"Ada"} x`, "bad_request.invalid_json"},
-		{"null is not an object", "application/json", `null`, "bad_request.invalid_json"},
-		{"an array is not an object", "application/json", ` [{"name":"Ada"}]`, "bad_request.invalid_json"},
-		{"whitespace only", "application/json", " \n ", "bad_request.invalid_json"},
-		{"one byte over the limit", "application/json", `{"name":"` + strings.Repeat("a", MaxBodyBytes+1-len(`{"name":""}`)) + `"}`, "bad_request.too_large"},
+		{"proto field names", "application/json", `{"name":"Ada","syntax":"SYNTAX_PROTO3","source_context":{"file_name":"a.proto"}}`, "", ""},
+		{"JSON names are accepted too", "application/json", `{"name":"Ada","sourceContext":{"fileName":"a.proto"}}`, "", ""},
+		{"media type parameters are fine", "application/json; charset=utf-8", `{"name":"Ada"}`, "", ""},
+		{"exactly the limit", "application/json", limit(0), "", ""},
+
+		{"no Content-Type", "", `{"name":"Ada"}`, "bad_request.content_type", ""},
+		{"text/plain (a cross-site simple request)", "text/plain", `{"name":"Ada"}`, "bad_request.content_type", ""},
+		{"binary protobuf isn't served yet", "application/protobuf", `{"name":"Ada"}`, "bad_request.content_type", ""},
+		{"one byte over the limit", "application/json", limit(1), "bad_request.too_large", ""},
+
+		{"empty body", "application/json", ``, "bad_request.invalid_json", "request body must be a JSON object"},
+		{"whitespace only", "application/json", " \n ", "bad_request.invalid_json", "request body must be a JSON object"},
+		{"null", "application/json", `null`, "bad_request.invalid_json", "request body must be a JSON object"},
+		{"array", "application/json", ` [{"name":"Ada"}]`, "bad_request.invalid_json", "request body must be a JSON object"},
+		{"not JSON", "application/json", `{name=Ada`, "bad_request.invalid_json", "request body must be valid JSON, with one object"},
+		{"two objects", "application/json", `{"name":"a"}{"name":"b"}`, "bad_request.invalid_json", "request body must be valid JSON, with one object"},
+		{"trailing junk", "application/json", `{"name":"Ada"} x`, "bad_request.invalid_json", "request body must be valid JSON, with one object"},
+		{"unknown field is named", "application/json", `{"name":"Ada","title":"Dr"}`, "bad_request.invalid_json", `request body has an unknown field "title"`},
+		{"long unknown name isn't repeated", "application/json", `{"` + strings.Repeat("x", 65) + `":1}`, "bad_request.invalid_json", "request body has an unknown field"},
+		{"odd unknown name isn't repeated", "application/json", `{"ti\ntle":1}`, "bad_request.invalid_json", "request body has an unknown field"},
+		{"wrong type", "application/json", `{"name":7}`, "bad_request.invalid_json", "request body's fields must each appear once, with a value of the right type"},
+		{"unknown enum value", "application/json", `{"syntax":"SYNTAX_PROTO9"}`, "bad_request.invalid_json", "request body's fields must each appear once, with a value of the right type"},
+		{"field twice", "application/json", `{"name":"a","name":"b"}`, "bad_request.invalid_json", "request body's fields must each appear once, with a value of the right type"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got thing
-			err := DecodeJSON(jsonRequest(t, tt.contentType, strings.NewReader(tt.body)), &got)
+			var got typepb.Type
+			err := Decode(bodyRequest(t, tt.contentType, strings.NewReader(tt.body)), &got)
 			if tt.wantCode == "" {
-				if err != nil || got.Name == "" {
-					t.Fatalf("err = %v, thing = %+v; want it decoded", err, got)
+				if err != nil || got.GetName() == "" {
+					t.Fatalf("err = %v, got %v; want it decoded", err, &got)
 				}
 				return
 			}
 			var terr *terrors.Error
-			if !errors.As(err, &terr) || terr.Code != tt.wantCode {
-				t.Fatalf("err = %v, want terror %s", err, tt.wantCode)
+			if !errors.As(err, &terr) || terr.Code != tt.wantCode || (tt.wantMessage != "" && terr.Message != tt.wantMessage) {
+				t.Fatalf("err = %v, want %s %q", err, tt.wantCode, tt.wantMessage)
 			}
-			if strings.Contains(terr.Message, "json:") {
-				t.Errorf("message leaks Go's decoder wording: %q", terr.Message)
+			if strings.Contains(terr.Message, "proto:") || strings.Contains(terr.Message, "json:") {
+				t.Errorf("message leaks a decoder's own wording: %q", terr.Message)
 			}
 		})
 	}
 }
 
-func TestDecodeJSONNilBody(t *testing.T) {
-	var got thing
-	err := DecodeJSON(jsonRequest(t, "application/json", nil), &got)
-	if !terrors.PrefixMatches(err, "bad_request.invalid_json") {
+func TestDecodeNilBody(t *testing.T) {
+	var got typepb.Type
+	if err := Decode(bodyRequest(t, "application/json", nil), &got); !terrors.PrefixMatches(err, "bad_request.invalid_json") {
 		t.Errorf("err = %v, want bad_request.invalid_json", err)
-	}
-}
-
-func TestDecodeJSONMessagesSayWhatIsWrong(t *testing.T) {
-	tests := map[string]string{
-		`{"title":"Dr"}`:                        `request body has an unknown field "title"`,
-		`{"` + strings.Repeat("x", 65) + `":1}`: "request body has an unknown field", // too long to repeat back
-		`{"na\nme":1}`:                          "request body has an unknown field", // odd characters aren't repeated back
-		`{"name":7}`:                            `field "name" has the wrong type`,
-		`{"name":`:                              "request body must be valid JSON",
-	}
-	for body, want := range tests {
-		var got thing
-		err := DecodeJSON(jsonRequest(t, "application/json", strings.NewReader(body)), &got)
-		var terr *terrors.Error
-		if !errors.As(err, &terr) || terr.Message != want {
-			t.Errorf("DecodeJSON(%s) = %v, want message %q", body, err, want)
-		}
 	}
 }
 
@@ -102,7 +96,7 @@ type failingReader struct{ err error }
 
 func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
 
-func TestDecodeJSONReadErrors(t *testing.T) {
+func TestDecodeReadErrors(t *testing.T) {
 	tests := map[string]struct {
 		err      error
 		wantCode string
@@ -113,8 +107,8 @@ func TestDecodeJSONReadErrors(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			var got thing
-			err := DecodeJSON(jsonRequest(t, "application/json", failingReader{tt.err}), &got)
+			var got typepb.Type
+			err := Decode(bodyRequest(t, "application/json", failingReader{tt.err}), &got)
 			var terr *terrors.Error
 			if !errors.As(err, &terr) || terr.Code != tt.wantCode {
 				t.Errorf("err = %v, want %s", err, tt.wantCode)

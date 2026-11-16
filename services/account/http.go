@@ -3,13 +3,14 @@ package account
 import (
 	"context"
 	"net/http"
-	"time"
 	"uuid"
 
 	"github.com/monzo/typhon"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
+	accountv1 "github.com/tinypell3ts/tiny-bank/proto/account/v1"
 )
 
 // Accounts is what the HTTP API needs from storage. *Store implements it; it's
@@ -19,10 +20,11 @@ type Accounts interface {
 	Get(ctx context.Context, id uuid.UUID) (Account, error)
 }
 
-// RegisterRoutes adds the account API to router:
+// RegisterRoutes adds the account API to router. Its contract, the request
+// and response messages, is proto/account/v1/account.proto:
 //
-//	POST /accounts      open an account
-//	GET  /accounts/:id  look one up
+//	POST /accounts      CreateAccountRequest -> Account: open an account
+//	GET  /accounts/:id  Account: look one up
 //
 // Handlers return terrors. kit.Handler turns them into responses (a terror's
 // code and message reach the caller), and logs and hides anything internal.
@@ -48,59 +50,49 @@ type handler struct {
 	accounts Accounts
 }
 
-// createRequest is the JSON body of POST /accounts.
-type createRequest struct {
-	CustomerID string `json:"customer_id"`
-	HolderName string `json:"holder_name"`
-	Currency   string `json:"currency"`
+// statusToProto is how each Status appears in the contract. A new Status needs
+// a value here and in AccountStatus. One that's missing reaches callers as
+// ACCOUNT_STATUS_UNSPECIFIED, which the contract tells them to treat as
+// "not open", so a mistake fails safe.
+var statusToProto = map[Status]accountv1.AccountStatus{
+	StatusOpen: accountv1.AccountStatus_ACCOUNT_STATUS_OPEN,
 }
 
-// accountJSON is how an account looks in responses.
-type accountJSON struct {
-	ID         string    `json:"id"`
-	CustomerID string    `json:"customer_id"`
-	HolderName string    `json:"holder_name"`
-	Currency   string    `json:"currency"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"created_at"` // RFC 3339, e.g. 2026-11-13T10:00:00Z
-}
-
-func toJSON(a Account) accountJSON {
-	return accountJSON{
-		ID:         a.ID.String(),
-		CustomerID: a.CustomerID.String(),
+// toProto is how an account looks in responses (proto/account/v1).
+func toProto(a Account) *accountv1.Account {
+	return &accountv1.Account{
+		Id:         a.ID.String(),
+		CustomerId: a.CustomerID.String(),
 		HolderName: a.HolderName,
 		Currency:   a.Currency.Code(),
-		Status:     string(a.Status),
-		CreatedAt:  a.CreatedAt.UTC(),
+		Status:     statusToProto[a.Status],
+		CreatedAt:  timestamppb.New(a.CreatedAt),
 	}
 }
 
 func (h handler) create(req typhon.Request) typhon.Response {
-	var body createRequest
-	if err := kit.DecodeJSON(req, &body); err != nil {
+	var body accountv1.CreateAccountRequest
+	if err := kit.Decode(req, &body); err != nil {
 		return typhon.Response{Error: err}
 	}
 
 	// Turn untrusted text into typed values here, at the edge, so everything
 	// after this point gets a well-formed UUID and a supported currency.
-	customerID, ok := parseID(body.CustomerID)
+	customerID, ok := parseID(body.GetCustomerId())
 	if !ok {
 		return typhon.Response{Error: invalid("customer_id",
 			"customer_id must be a lower-case UUID with dashes, like c0ffee00-0000-4000-8000-000000000001")}
 	}
-	currency, err := money.ParseCurrency(body.Currency)
+	currency, err := money.ParseCurrency(body.GetCurrency())
 	if err != nil {
 		return typhon.Response{Error: invalid("currency", "currency must be a supported ISO 4217 code, like GBP")}
 	}
 
-	acc, err := h.accounts.Create(req.Context, NewRequest{CustomerID: customerID, HolderName: body.HolderName, Currency: currency})
+	acc, err := h.accounts.Create(req.Context, NewRequest{CustomerID: customerID, HolderName: body.GetHolderName(), Currency: currency})
 	if err != nil {
 		return typhon.Response{Error: err}
 	}
-	rsp := req.ResponseWithCode(toJSON(acc), http.StatusCreated)
-	rsp.Header.Set("Location", "/accounts/"+acc.ID.String())
-	return rsp
+	return kit.RespondCreated(req, toProto(acc), "/accounts/"+acc.ID.String())
 }
 
 func (h handler) get(req typhon.Request) typhon.Response {
@@ -114,7 +106,7 @@ func (h handler) get(req typhon.Request) typhon.Response {
 	if err != nil {
 		return typhon.Response{Error: err}
 	}
-	return req.Response(toJSON(acc))
+	return kit.Respond(req, toProto(acc), http.StatusOK)
 }
 
 // parseID accepts only the canonical form of a UUID, lower-case with dashes,

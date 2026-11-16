@@ -20,7 +20,11 @@ CNPG_CHART_VERSION := 0.29.1
 # change upstream can't break or loosen our checks.
 CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdde38b5fecd0f8436ec5f3aa3679a3b86/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
 
-.PHONY: help fmt fmt-check vet lint test test-integration test-scripts check hooks docker-build docker-smoke \
+# The breaking-change check compares proto/ with this git ref. CI sets it to
+# origin/main, because a CI checkout has no local main branch.
+PROTO_AGAINST ?= main
+
+.PHONY: help fmt fmt-check vet lint test test-integration test-scripts check hooks proto proto-check docker-build docker-smoke \
 	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down dev dev-down
 
 help: ## List targets
@@ -49,7 +53,29 @@ test-integration: ## Run integration tests against real Postgres in Docker (need
 test-scripts: ## Test the shell scripts in scripts/
 	scripts/check-branch-name_test.sh
 
-check: fmt-check vet lint test test-scripts ## Everything CI runs
+check: fmt-check vet lint test test-scripts proto-check ## Everything CI runs
+
+proto: ## Regenerate the Go code from proto/ (run after changing a .proto file)
+	find proto -name '*.pb.go' -delete
+	buf generate proto --template proto/buf.gen.yaml
+
+# The generated Go is committed, so go build works without buf. The last step
+# generates into build/_proto-check and compares, so it fails if a .proto file
+# changed without make proto (or someone edited a .pb.go file by hand).
+proto-check: ## Check the contracts: format, lint, no breaking changes, generated Go up to date
+	buf format --diff --exit-code proto
+	buf lint proto
+	@if ! git rev-parse --verify --quiet '$(PROTO_AGAINST)^{commit}' >/dev/null; then \
+		echo "proto-check: can't find $(PROTO_AGAINST) to check for breaking changes against (a shallow clone, or a typo?)"; exit 1; \
+	elif git cat-file -e '$(PROTO_AGAINST):proto/buf.yaml' 2>/dev/null; then \
+		buf breaking proto --against '.git#ref=$(PROTO_AGAINST),subdir=proto'; \
+	else \
+		echo "proto-check: $(PROTO_AGAINST) has no proto/ yet, so there's nothing to break"; \
+	fi
+	rm -rf build/_proto-check
+	buf generate proto --template proto/buf.gen.yaml --output build/_proto-check
+	@diff -r -x '*.proto' -x '*.yaml' -x '*.md' build/_proto-check/proto proto || \
+		{ echo "proto-check: generated Go is out of date: run make proto and commit the result"; exit 1; }
 
 hooks: ## Use the repo's git hooks (branch-name check on push)
 	git config core.hooksPath scripts/hooks

@@ -49,12 +49,13 @@ Current:
 ├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: config, startup (connect, migrate), HTTP server, probes
 ├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
-├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), Handler (Typhon router + shared filters), DecodeJSON, Health, Secret
+├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), Handler (Typhon router + shared filters), Decode/Respond (protobuf as JSON), Health, Secret
 │   └── kittest/         # Conformance: the checks every service's handler must pass (health, request IDs, errors, metrics)
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED metrics (Track)
 ├── pkg/db/              # Postgres: Open a pgx pool from DATABASE_URL, Migrate with goose behind an advisory lock
 │   └── dbtest/          # StartPostgres for integration tests (testcontainers)
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
+├── proto/               # protobuf contracts (buf), one versioned package per service API, plus generated Go
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
@@ -68,17 +69,19 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `proto/` for protobuf contracts.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. A service's API is a protobuf contract in `proto/<name>/v<N>/`.
 
-Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop, and [pkg/kit/AGENTS.md](pkg/kit/AGENTS.md) for changing the shared foundation.
+Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop, and [pkg/kit/AGENTS.md](pkg/kit/AGENTS.md) for changing the shared foundation, and [proto/AGENTS.md](proto/AGENTS.md) for changing contracts.
 
 ## Commands
 
 ```bash
 make             # list targets
 make fmt         # format code
-make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts
+make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts, proto-check
 make test-integration # integration tests against real Postgres in Docker (CI runs these too)
+make proto       # regenerate Go from proto/ after changing a .proto file (needs buf)
+make proto-check # contracts: buf format and lint, no breaking changes against main, generated Go up to date
 make hooks       # once per clone: enable the pre-push branch-name check
 make docker-smoke             # build the hello image and smoke-test it
 make docker-smoke SERVICE=x   # same for cmd/x
@@ -109,7 +112,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 ## Conventions
 
 - **Money is `int64` minor units plus an ISO 4217 currency code**, always as `money.Money` from `pkg/money` ([ADR-0004](docs/adr/0004-represent-money-as-int64-minor-units.md)). Never use floats for money, never mix currencies silently, and always handle the error from `Add`/`Sub`. Never discard it with `_`: lint doesn't catch that, so reviewers must.
-- **Every service is built on `pkg/kit` and [Typhon](https://github.com/monzo/typhon):** `kit.Main`, `kit.LoadConfig` (embed `kit.Config` for extra settings), `kit.NewLogger` and `kit.Serve`. Routes are a `typhon.Router` of `typhon.Service` handlers, and `kit.Handler` wraps it in the shared filters: request IDs, access logs, metrics, error cleaning and panic recovery. Handlers fail by returning a [terrors](https://github.com/monzo/terrors) error (`terrors.BadRequest("holder_name", "…", nil)`, `terrors.NotFound(…)`), and read JSON bodies with `kit.DecodeJSON`, which is strict: one JSON object, no unknown fields, at most 16 KB (`kit.Handler` caps every body), and every failure is a 400 with its own code. Any other error is logged and hidden from the caller as a 500, and a caller that hangs up gets 499. A service only writes its own routes, readiness check and startup. Never copy the filters into a service. Every service has a `TestConformance` that runs `kittest.Conformance` on its real handler, and its own tests cover only what's its own.
+- **Every service is built on `pkg/kit` and [Typhon](https://github.com/monzo/typhon):** `kit.Main`, `kit.LoadConfig` (embed `kit.Config` for extra settings), `kit.NewLogger` and `kit.Serve`. Routes are a `typhon.Router` of `typhon.Service` handlers, and `kit.Handler` wraps it in the shared filters: request IDs, access logs, metrics, error cleaning and panic recovery. Handlers fail by returning a [terrors](https://github.com/monzo/terrors) error (`terrors.BadRequest("holder_name", "…", nil)`, `terrors.NotFound(…)`), read a request into its proto message with `kit.Decode`, and answer with `kit.Respond` or `kit.RespondCreated`. Bodies are JSON with the proto field names (`customer_id`). `kit.Decode` is strict: one JSON object, no unknown fields, at most 16 KB (`kit.Handler` caps every body), and every failure is a 400 with its own code. Any other error is logged and hidden from the caller as a 500, and a caller that hangs up gets 499. A service only writes its own routes, readiness check and startup. Never copy the filters into a service. Every service has a `TestConformance` that runs `kittest.Conformance` on its real handler, and its own tests cover only what's its own.
 - **Config from environment variables** (12-factor). No config files baked into images.
 - **Logs are structured JSON to stdout** via `log/slog`. Never log secrets or full card or account numbers.
 - **Metrics come from `pkg/obs`.** `kit.Handler` serves `GET /metrics` and records HTTP metrics for every service. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/:id`), never raw paths, IDs, emails or amounts.

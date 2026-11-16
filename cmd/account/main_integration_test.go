@@ -241,7 +241,7 @@ func TestAccountAPIEndToEnd(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.Currency != "GBP" || created.Status != "open" {
+	if created.ID == "" || created.Currency != "GBP" || created.Status != "ACCOUNT_STATUS_OPEN" {
 		t.Fatalf("POST /accounts body = %+v, want a GBP open account with an ID", created)
 	}
 	location := resp.Header.Get("Location")

@@ -96,6 +96,16 @@ func errorOf(t *testing.T, rec *httptest.ResponseRecorder) terror {
 
 const custJSON = `"customer_id":"c0ffee00-0000-4000-8000-000000000001"`
 
+// accountBody is an account as JSON callers see it: the proto field names.
+type accountBody struct {
+	ID         string `json:"id"`
+	CustomerID string `json:"customer_id"`
+	HolderName string `json:"holder_name"`
+	Currency   string `json:"currency"`
+	Status     string `json:"status"`
+	CreatedAt  string `json:"created_at"`
+}
+
 func TestCreateAccount(t *testing.T) {
 	rec, _ := serve(t, newFake(), http.MethodPost, "/accounts",
 		`{`+custJSON+`,"holder_name":"  Ada Lovelace ","currency":"GBP"}`)
@@ -103,11 +113,11 @@ func TestCreateAccount(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body)
 	}
-	var got accountJSON
+	var got accountBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.CustomerID != customer.String() || got.HolderName != "Ada Lovelace" || got.Currency != "GBP" || got.Status != "open" {
+	if got.CustomerID != customer.String() || got.HolderName != "Ada Lovelace" || got.Currency != "GBP" || got.Status != "ACCOUNT_STATUS_OPEN" {
 		t.Errorf("body = %+v", got)
 	}
 	if rec.Header().Get("Location") != "/accounts/"+got.ID {
@@ -126,8 +136,8 @@ func TestCreateAccountRejectsBadRequests(t *testing.T) {
 		{"null", `null`, "bad_request.invalid_json", "JSON object"},
 		{"empty body", ``, "bad_request.invalid_json", "JSON object"},
 		{"unknown field", `{` + custJSON + `,"holder_name":"Ada","currancy":"GBP"}`, "bad_request.invalid_json", `unknown field "currancy"`},
-		{"trailing data", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}{"currency":"EUR"}`, "bad_request.invalid_json", "single JSON object"},
-		{"trailing junk", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"} x`, "bad_request.invalid_json", "single JSON object"},
+		{"trailing data", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"}{"currency":"EUR"}`, "bad_request.invalid_json", "one object"},
+		{"trailing junk", `{` + custJSON + `,"holder_name":"Ada","currency":"GBP"} x`, "bad_request.invalid_json", "one object"},
 		{"customer ID upper case", `{"customer_id":"C0FFEE00-0000-4000-8000-000000000001","holder_name":"Ada","currency":"GBP"}`, "bad_request.customer_id", "lower-case UUID"},
 		{"customer not a UUID", `{"customer_id":"ada","holder_name":"Ada","currency":"GBP"}`, "bad_request.customer_id", "lower-case UUID"},
 		{"missing customer", `{"holder_name":"Ada","currency":"GBP"}`, "bad_request.customer_id", "lower-case UUID"},
@@ -191,10 +201,20 @@ func TestGetAccount(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	want := `{"id":"` + acc.ID.String() + `","customer_id":"` + customer.String() +
-		`","holder_name":"Ada","currency":"EUR","status":"open","created_at":"2026-11-13T10:00:00Z"}`
-	if got := strings.TrimSpace(rec.Body.String()); got != want {
-		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	// protojson varies its spacing on purpose, so compare the parsed fields.
+	// DisallowUnknownFields makes sure the body has nothing else in it.
+	dec := json.NewDecoder(rec.Body)
+	dec.DisallowUnknownFields()
+	var got accountBody
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("body isn't the account's fields: %v", err)
+	}
+	want := accountBody{
+		ID: acc.ID.String(), CustomerID: customer.String(), HolderName: "Ada", Currency: "EUR",
+		Status: "ACCOUNT_STATUS_OPEN", CreatedAt: "2026-11-13T10:00:00Z",
+	}
+	if got != want {
+		t.Errorf("body =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

@@ -39,3 +39,7 @@ The plan was to build our own Typhon-style `Service`/`Filter` types and our own 
 - Error details are visible to calling services by design, which makes "no secrets or personal data in terror params" a rule (AGENTS.md). Customer-facing responses are cleaned up at the edge.
 - Typhon is less widely known than gRPC, and its releases are infrequent (v1.1.10, September 2024). If it stopped being maintained, `pkg/kit` is the one place that would need to change, because services only see `typhon.Service` and terrors.
 - terrors has no tagged releases, so `go.mod` pins a commit (a Go pseudo-version). Upgrading it is a deliberate change, like any other dependency.
+
+## Update, Phase 6 (2026-11-17)
+
+Phase 6 brought in the protobuf contracts, but services still exchange them as JSON, with the proto field names (`customer_id`), through `kit.Decode` and `kit.Respond`. Binary protobuf bodies and Typhon clients move to Phase 7, with the first service-to-service call, because until then nothing would use them. The decision itself, Typhon and terrors with protobuf contracts, is unchanged.
