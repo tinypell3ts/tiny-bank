@@ -2,8 +2,9 @@
 // from the environment (with Secret for anything secret), JSON logs, running
 // the server with graceful shutdown, and Handler, which puts a service's
 // Typhon router behind the filters every service shares: request IDs, access
-// logs, metrics, safe errors and panic recovery. DecodeJSON reads request
-// bodies strictly, and Health is the liveness check.
+// logs, metrics, safe errors and panic recovery. Decode reads a request
+// body into a protobuf message strictly, Respond writes one back as JSON, and
+// Health is the liveness check.
 //
 // A service wires these together with its own routes, readiness check and
 // startup steps. Anything that differs between services stays in the service.
