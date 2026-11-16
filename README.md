@@ -72,6 +72,7 @@ kubectl --context kind-tiny-bank port-forward svc/hello 8080:80
 
 - [Architecture](docs/architecture.md): how the pieces fit together
 - [Observability](docs/observability.md): logs, metrics and traces
+- [Security](docs/security.md): what we protect, the controls and the known gaps ([how to report a vulnerability](SECURITY.md))
 - [Decisions (ADRs)](docs/adr/): why we chose what we chose
 - [Phases](docs/phases/): what each phase built and why
 - [AGENTS.md](AGENTS.md): conventions and how we work (for humans and AI agents)
