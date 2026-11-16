@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+// The account service's API: opening accounts and looking them up.
+//
+// It's internal, called by other services, which name the customer an
+// account is for. Requests and responses are sent as JSON with these field
+// names (the default), or as binary protobuf with
+// Content-Type and Accept: application/protobuf.
+//
+//   POST /accounts      CreateAccountRequest -> Account (201, Location header)
+//   GET  /accounts/:id  -> Account
+//
+// Errors are terrors, such as bad_request.holder_name or not_found.account.
+package account.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tinypell3ts/tiny-bank/proto/account/v1;accountv1";
+
+// An account holds money in one currency for one customer.
+message Account {
+  // The account's ID: a UUID, lower-case with dashes.
+  string id = 1;
+  // The customer the account belongs to: a UUID, lower-case with dashes.
+  string customer_id = 2;
+  // The name on the account, 1 to 200 characters.
+  string holder_name = 3;
+  // The ISO 4217 currency code, such as GBP.
+  string currency = 4;
+  AccountStatus status = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Where an account is in its life. New states are added at the end, and a
+// caller must treat a value it doesn't know as "not open".
+enum AccountStatus {
+  ACCOUNT_STATUS_UNSPECIFIED = 0;
+  // The account can be used.
+  ACCOUNT_STATUS_OPEN = 1;
+}
+
+// Opens an account for a customer who already exists.
+message CreateAccountRequest {
+  // A UUID, lower-case with dashes.
+  string customer_id = 1;
+  // 1 to 200 characters, with no control characters. Spaces at either end
+  // are trimmed.
+  string holder_name = 2;
+  // A supported ISO 4217 currency code: GBP, EUR, USD or JPY.
+  string currency = 3;
+}

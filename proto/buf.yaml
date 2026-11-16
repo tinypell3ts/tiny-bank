@@ -1,0 +1,13 @@
+# buf workspace for tiny-bank's contracts. Run buf from the repo root through
+# make (make proto, make proto-check), never by hand, so CI and local agree.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+breaking:
+  # FILE is the strictest set: no change that breaks generated code or the wire
+  # format, including moving a type to another file.
+  use:
+    - FILE

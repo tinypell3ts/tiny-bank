@@ -1,0 +1,10 @@
+# Generates Go next to each .proto file (paths=source_relative), so
+# proto/account/v1/account.proto becomes proto/account/v1/account.pb.go.
+# protoc-gen-go is pinned in go.mod as a tool, so everyone (and CI) generates
+# with the same version.
+version: v2
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: proto
+    opt:
+      - paths=source_relative

@@ -55,6 +55,7 @@ Current:
 ├── pkg/db/              # Postgres: Open a pgx pool from DATABASE_URL, Migrate with goose behind an advisory lock
 │   └── dbtest/          # StartPostgres for integration tests (testcontainers)
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
+├── proto/               # protobuf contracts (buf), one versioned package per service API, plus generated Go
 ├── deploy/
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
@@ -68,17 +69,19 @@ Current:
     └── phases/          # one page per phase: what was built and why
 ```
 
-Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. Planned (added only when a phase needs them): `proto/` for protobuf contracts.
+Each service is a binary in `cmd/<name>/` (wiring only) plus its code in `services/<name>/`. A service's API is a protobuf contract in `proto/<name>/v<N>/`.
 
-Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop, and [pkg/kit/AGENTS.md](pkg/kit/AGENTS.md) for changing the shared foundation.
+Nested rules: [deploy/AGENTS.md](deploy/AGENTS.md) for the cluster, chart and dev loop, and [pkg/kit/AGENTS.md](pkg/kit/AGENTS.md) for changing the shared foundation, and [proto/AGENTS.md](proto/AGENTS.md) for changing contracts.
 
 ## Commands
 
 ```bash
 make             # list targets
 make fmt         # format code
-make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts
+make check       # everything CI runs: fmt-check, vet, lint, test (-race -cover), test-scripts, proto-check
 make test-integration # integration tests against real Postgres in Docker (CI runs these too)
+make proto       # regenerate Go from proto/ after changing a .proto file (needs buf)
+make proto-check # contracts: buf format and lint, no breaking changes against main, generated Go up to date
 make hooks       # once per clone: enable the pre-push branch-name check
 make docker-smoke             # build the hello image and smoke-test it
 make docker-smoke SERVICE=x   # same for cmd/x

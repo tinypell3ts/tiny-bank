@@ -44,6 +44,20 @@ jobs:
       - name: go test
         run: make test
 
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the breaking-change check compares with origin/main
+      - uses: actions/setup-go@v6 # make proto-check generates with the protoc-gen-go pinned in go.mod
+        with:
+          go-version-file: go.mod
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.75.0 # keep in step with local `buf --version`
+      - name: Check contracts (format, lint, breaking changes, generated Go up to date)
+        run: make proto-check PROTO_AGAINST=origin/main
+
   integration:
     runs-on: ubuntu-latest # has Docker, which testcontainers needs
     steps:
