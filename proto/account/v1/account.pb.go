@@ -93,8 +93,12 @@ type Account struct {
 	// The name on the account, 1 to 200 characters.
 	HolderName string `protobuf:"bytes,3,opt,name=holder_name,json=holderName,proto3" json:"holder_name,omitempty"`
 	// The ISO 4217 currency code, such as GBP.
-	Currency      string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
-	Status        AccountStatus          `protobuf:"varint,5,opt,name=status,proto3,enum=account.v1.AccountStatus" json:"status,omitempty"`
+	Currency string `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
+	// Where the account is in its life. Treat ACCOUNT_STATUS_UNSPECIFIED, or
+	// any value you don't recognise, as "not open": don't move money in or out.
+	Status AccountStatus `protobuf:"varint,5,opt,name=status,proto3,enum=account.v1.AccountStatus" json:"status,omitempty"`
+	// When the account was opened, as recorded by the account service's
+	// database, in UTC. It never changes.
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

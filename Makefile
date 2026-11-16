@@ -65,7 +65,9 @@ proto: ## Regenerate the Go code from proto/ (run after changing a .proto file)
 proto-check: ## Check the contracts: format, lint, no breaking changes, generated Go up to date
 	buf format --diff --exit-code proto
 	buf lint proto
-	@if git cat-file -e '$(PROTO_AGAINST):proto/buf.yaml' 2>/dev/null; then \
+	@if ! git rev-parse --verify --quiet '$(PROTO_AGAINST)^{commit}' >/dev/null; then \
+		echo "proto-check: can't find $(PROTO_AGAINST) to check for breaking changes against (a shallow clone, or a typo?)"; exit 1; \
+	elif git cat-file -e '$(PROTO_AGAINST):proto/buf.yaml' 2>/dev/null; then \
 		buf breaking proto --against '.git#ref=$(PROTO_AGAINST),subdir=proto'; \
 	else \
 		echo "proto-check: $(PROTO_AGAINST) has no proto/ yet, so there's nothing to break"; \

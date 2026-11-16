@@ -27,7 +27,11 @@ message Account {
   string holder_name = 3;
   // The ISO 4217 currency code, such as GBP.
   string currency = 4;
+  // Where the account is in its life. Treat ACCOUNT_STATUS_UNSPECIFIED, or
+  // any value you don't recognise, as "not open": don't move money in or out.
   AccountStatus status = 5;
+  // When the account was opened, as recorded by the account service's
+  // database, in UTC. It never changes.
   google.protobuf.Timestamp created_at = 6;
 }
 
