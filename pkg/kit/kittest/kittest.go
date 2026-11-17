@@ -186,7 +186,7 @@ func serve(h http.Handler, method, path string, header http.Header) *httptest.Re
 // since kit.Handler adds the probes and db.Run builds it the same way.
 //
 //	func TestConformance(t *testing.T) {
-//		kittest.ConformanceOf(t, func(r *typhon.Router) { _ = routes(r, nil, nil) })
+//		kittest.ConformanceOf(t, func(r *typhon.Router) { _ = routes(r, db.Deps{}) })
 //	}
 func ConformanceOf(t *testing.T, routes func(router *typhon.Router)) {
 	t.Helper()

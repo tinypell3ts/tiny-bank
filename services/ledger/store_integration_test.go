@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"uuid"
@@ -340,4 +341,25 @@ func TestConcurrentRetriesPostOnce(t *testing.T) {
 		}
 	}
 	wantBalance(t, s, alice, gbp(700))
+}
+
+// TestJournalsAndEntriesAreAppendOnly checks the audit trail: once written,
+// history can't be changed or removed, even by SQL that skips the Go code.
+func TestJournalsAndEntriesAreAppendOnly(t *testing.T) {
+	s := newTestStore(t)
+	fund(t, s, alice, 1000)
+
+	for _, sql := range []string{
+		`UPDATE entries SET amount = amount * 2`,
+		`DELETE FROM entries`,
+		`TRUNCATE entries`,
+		`UPDATE journals SET currency = 'EUR'`,
+		`DELETE FROM journals`,
+		`TRUNCATE journals CASCADE`,
+	} {
+		if _, err := s.pool.Exec(t.Context(), sql); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Errorf("%s: err = %v, want it refused as append-only", sql, err)
+		}
+	}
+	wantBalance(t, s, alice, gbp(1000)) // and the balance still matches its entries (checkInvariants)
 }

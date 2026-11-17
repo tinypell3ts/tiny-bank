@@ -7,6 +7,7 @@ import (
 	"uuid"
 
 	"github.com/monzo/terrors"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
@@ -18,12 +19,13 @@ import (
 type Service struct {
 	*Store
 	accounts Accounts
+	metrics  *metrics
 }
 
-// NewService returns the ledger, storing journals in store and checking
-// customer accounts with accounts.
-func NewService(store *Store, accounts Accounts) *Service {
-	return &Service{Store: store, accounts: accounts}
+// NewService returns the ledger, storing journals in store, checking customer
+// accounts with accounts, and registering its business metrics on reg.
+func NewService(store *Store, accounts Accounts, reg prometheus.Registerer) *Service {
+	return &Service{Store: store, accounts: accounts, metrics: newMetrics(reg)}
 }
 
 // Post moves the money in req, as Store.Post does, once every customer
@@ -40,7 +42,12 @@ func NewService(store *Store, accounts Accounts) *Service {
 // a slow account service never holds up other posts on the same accounts.
 // An account could change between its check and the post; while accounts
 // can't close, that can't matter.
-func (s *Service) Post(ctx context.Context, req NewJournal) (Journal, bool, error) {
+func (s *Service) Post(ctx context.Context, req NewJournal) (j Journal, created bool, err error) {
+	defer func() { s.metrics.record(req, j, created, err) }()
+	return s.post(ctx, req)
+}
+
+func (s *Service) post(ctx context.Context, req NewJournal) (Journal, bool, error) {
 	req, err := req.Validate()
 	if err != nil {
 		return Journal{}, false, fmt.Errorf("post journal: %w", err)

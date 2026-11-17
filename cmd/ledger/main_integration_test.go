@@ -15,6 +15,7 @@ import (
 
 	"github.com/monzo/typhon"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
@@ -83,7 +84,7 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 
 	url := dbtest.StartPostgres(t, "s3cret")
 	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": url, "ACCOUNT_URL": accountURL})
-	if !strings.Contains(logs.String(), `"applied":["00001_create_ledger.sql"]`) {
+	if !strings.Contains(logs.String(), `"applied":["00001_create_ledger.sql","00002_append_only_journals.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
 
@@ -99,6 +100,16 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 	// The ledger checked alice with the account service, passing our request ID on.
 	if !strings.Contains(accountLogs.String(), `"request_id":"trace-me-1"`) {
 		t.Errorf("the account service didn't see the ledger's request ID; its logs:\n%s", accountLogs)
+	}
+	// And the journal records it, so the audit trail leads back to the logs.
+	pool, err := db.Open(t.Context(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var requestID string
+	if err := pool.QueryRow(t.Context(), `SELECT request_id FROM journals WHERE idempotency_key = 'deposit-1'`).Scan(&requestID); err != nil || requestID != "trace-me-1" {
+		t.Errorf("journal's request_id = %q, %v; want trace-me-1", requestID, err)
 	}
 
 	status, first := post(t, base+"/journals", journal("t1", alice, bob, 300), "")
@@ -136,6 +147,20 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 	}
 	if status, body := kittest.Get(t, base+"/journals/"+j.ID); status != http.StatusOK || body != first {
 		t.Errorf("GET journal = %d %s, want %s", status, body, first)
+	}
+	// The business metrics: two journals posted (the deposit and t1), one
+	// retry, and two refusals.
+	_, metrics := kittest.Get(t, base+"/metrics")
+	for _, want := range []string{
+		`ledger_journals_total{currency="GBP",outcome="posted",reason=""} 2`,
+		`ledger_journals_total{currency="GBP",outcome="retried",reason=""} 1`,
+		`ledger_journals_total{currency="GBP",outcome="refused",reason="precondition_failed.insufficient_funds"} 1`,
+		`ledger_journals_total{currency="GBP",outcome="refused",reason="not_found.account"} 1`,
+		`ledger_moved_minor_units_total{currency="GBP"} 1300`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("/metrics is missing %s", want)
+		}
 	}
 	if strings.Contains(logs.String(), "s3cret") {
 		t.Error("logs leak the database password")

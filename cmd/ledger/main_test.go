@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/monzo/typhon"
+	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
 )
 
@@ -14,7 +16,8 @@ import (
 func TestConformance(t *testing.T) {
 	env := map[string]string{"ACCOUNT_URL": "http://account"}
 	kittest.ConformanceOf(t, func(r *typhon.Router) {
-		if err := routes(r, nil, func(k string) string { return env[k] }); err != nil {
+		deps := db.Deps{Getenv: func(k string) string { return env[k] }, Metrics: prometheus.NewRegistry()}
+		if err := routes(r, deps); err != nil {
 			t.Fatal(err)
 		}
 	})

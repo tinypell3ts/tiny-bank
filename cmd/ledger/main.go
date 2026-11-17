@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net/url"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
@@ -27,12 +26,13 @@ func main() { kit.Main("ledger", run) }
 // is where the account service is (http://account on the cluster, set in
 // deploy/values/ledger.yaml): the ledger checks every customer account with
 // it before moving money.
-func routes(router *typhon.Router, pool *pgxpool.Pool, getenv func(string) string) error {
-	accountURL, err := baseURL(getenv("ACCOUNT_URL"))
+func routes(router *typhon.Router, deps db.Deps) error {
+	accountURL, err := baseURL(deps.Getenv("ACCOUNT_URL"))
 	if err != nil {
 		return err
 	}
-	ledger.RegisterRoutes(router, ledger.NewService(ledger.NewStore(pool), ledger.AccountService{BaseURL: accountURL}))
+	accounts := ledger.AccountService{BaseURL: accountURL}
+	ledger.RegisterRoutes(router, ledger.NewService(ledger.NewStore(deps.Pool), accounts, deps.Metrics))
 	return nil
 }
 

@@ -10,15 +10,27 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/monzo/typhon"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
-// Routes adds a service's API to router, built on its database pool. getenv
-// reads any settings of the service's own (such as where another service
-// is); an error, like a missing setting, stops the service starting.
-type Routes func(router *typhon.Router, pool *pgxpool.Pool, getenv func(string) string) error
+// Deps is what a service's routes are built from.
+type Deps struct {
+	// Pool is the service's database, connected and migrated.
+	Pool *pgxpool.Pool
+	// Getenv reads settings of the service's own, such as where another
+	// service is.
+	Getenv func(string) string
+	// Metrics is where the service registers its business metrics.
+	// kit.Handler serves them at GET /metrics with the HTTP metrics.
+	Metrics prometheus.Registerer
+}
+
+// Routes adds a service's API to router, built from deps. An error, like a
+// missing setting, stops the service starting.
+type Routes func(router *typhon.Router, deps Deps) error
 
 // Run returns the whole of a service that has its own database, ready for
 // kit.Main, which calls it with the real environment and stdout:
@@ -52,11 +64,12 @@ func Run(name string, migrations fs.FS, routes Routes) func(ctx context.Context,
 		}
 
 		router := typhon.Router{}
-		if err := routes(&router, pool, getenv); err != nil {
+		reg := obs.NewRegistry()
+		if err := routes(&router, Deps{Pool: pool, Getenv: getenv, Metrics: reg}); err != nil {
 			return fmt.Errorf("routes: %w", err)
 		}
 		var ready atomic.Bool
-		h := kit.Handler(logger, obs.NewRegistry(), &router, &ready, pool.Ping)
+		h := kit.Handler(logger, reg, &router, &ready, pool.Ping)
 		return kit.Serve(ctx, ln, h, &ready, logger, cfg.ShutdownTimeout)
 	}
 }

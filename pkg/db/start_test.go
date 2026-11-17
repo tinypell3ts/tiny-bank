@@ -10,7 +10,6 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
@@ -91,7 +90,7 @@ func TestStartGivesUpWhenTheDatabaseNeverAnswers(t *testing.T) {
 }
 
 func TestRunRejectsBadConfig(t *testing.T) {
-	run := Run("test", fstest.MapFS{}, func(*typhon.Router, *pgxpool.Pool, func(string) string) error {
+	run := Run("test", fstest.MapFS{}, func(*typhon.Router, Deps) error {
 		t.Error("routes added without a config")
 		return nil
 	})

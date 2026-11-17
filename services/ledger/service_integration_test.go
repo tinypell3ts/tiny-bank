@@ -9,6 +9,8 @@ import (
 	"testing"
 	"uuid"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -41,7 +43,7 @@ func openGBP() AccountInfo { return AccountInfo{Open: true, Currency: money.GBP(
 func newTestService(t *testing.T) (*Service, *fakeAccounts) {
 	t.Helper()
 	accounts := &fakeAccounts{info: map[uuid.UUID]AccountInfo{alice: openGBP(), bob: openGBP()}}
-	return NewService(newTestStore(t), accounts), accounts
+	return NewService(newTestStore(t), accounts, prometheus.NewRegistry()), accounts
 }
 
 func TestServicePostsBetweenOpenAccounts(t *testing.T) {

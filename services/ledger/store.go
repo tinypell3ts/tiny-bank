@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -78,9 +79,9 @@ func post(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, error) {
 	// this waits for it: if it commits, the key is taken (a retry); if it
 	// rolls back, this post goes ahead. Either way the money moves once.
 	err := tx.QueryRow(ctx,
-		`INSERT INTO journals (idempotency_key, currency) VALUES ($1, $2)
+		`INSERT INTO journals (idempotency_key, currency, request_id) VALUES ($1, $2, NULLIF($3, ''))
 		 ON CONFLICT (idempotency_key) DO NOTHING RETURNING id, created_at`,
-		req.IdempotencyKey, currency.Code(),
+		req.IdempotencyKey, currency.Code(), kit.RequestIDFrom(ctx),
 	).Scan(&j.ID, &j.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Journal{}, errAlreadyPosted

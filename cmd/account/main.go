@@ -8,7 +8,6 @@
 package main
 
 import (
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
@@ -22,8 +21,8 @@ var run = db.Run("account", account.Migrations(), routes)
 func main() { kit.Main("account", run) }
 
 // routes is the account API, on the service's database. It has no settings
-// of its own.
-func routes(router *typhon.Router, pool *pgxpool.Pool, _ func(string) string) error {
-	account.RegisterRoutes(router, account.NewStore(pool))
+// or business metrics of its own.
+func routes(router *typhon.Router, deps db.Deps) error {
+	account.RegisterRoutes(router, account.NewStore(deps.Pool))
 	return nil
 }
