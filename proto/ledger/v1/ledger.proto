@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+// The ledger service's API: moving money between accounts, and reading
+// balances. The ledger is the one record of every movement of money.
+//
+// It's internal, called by other services. Requests and responses are JSON,
+// using these field names (idempotency_key). Binary protobuf arrives with the
+// first service-to-service client, later in Phase 7.
+//
+//   POST /journals              PostJournalRequest -> Journal
+//                               (201 with a Location header; 200 with the
+//                               first journal for a retry with the same key)
+//   GET  /journals/:id          -> Journal
+//   GET  /accounts/:id/balance  -> Balance
+//
+// Errors are terrors:
+//   bad_request.idempotency_key, bad_request.currency, bad_request.entries
+//   precondition_failed.insufficient_funds: a customer account would go below zero
+//   precondition_failed.idempotency_key: the key was used for a different journal
+//   not_found.journal, not_found.account
+//
+// A precondition_failed answer is final: retrying the same request gets the
+// same answer until something changes (the account receives money).
+package ledger.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tinypell3ts/tiny-bank/proto/ledger/v1;ledgerv1";
+
+// Moves money between accounts, all of it or none of it.
+message PostJournalRequest {
+  // Chosen by the caller, once per movement of money, and sent again
+  // unchanged on every retry. 1 to 100 characters: letters, digits and
+  // . _ : -. A UUID works well.
+  string idempotency_key = 1;
+  // The ISO 4217 code every entry is in: GBP, EUR, USD or JPY.
+  string currency = 2;
+  // 2 to 10 entries, one per account, adding up to zero.
+  repeated Entry entries = 3;
+}
+
+// One account's part in a journal.
+message Entry {
+  // A UUID, lower-case with dashes: an account from the account service, or
+  // a funding account for money arriving from outside the bank.
+  string account_id = 1;
+  // In the currency's minor unit (pence for GBP, yen for JPY). Positive adds
+  // to the account, negative takes from it. Never zero, and at most
+  // 1000000000000 either way. JSON writes it as a string ("-300"), as proto3
+  // JSON does for every 64-bit integer; a number is accepted too.
+  int64 amount = 2;
+}
+
+// A posted movement of money. Journals never change.
+message Journal {
+  // A UUID, lower-case with dashes.
+  string id = 1;
+  string idempotency_key = 2;
+  string currency = 3;
+  // Sorted by account ID, whatever order the request listed them in.
+  repeated Entry entries = 4;
+  // When it was posted, as recorded by the ledger's database, in UTC.
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// How much an account holds, by the ledger's record.
+message Balance {
+  string account_id = 1;
+  string currency = 2;
+  // In the currency's minor unit. A customer account's is never negative. A
+  // funding account's goes negative as money arrives from outside the bank.
+  int64 amount = 3;
+}
