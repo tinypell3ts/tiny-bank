@@ -100,7 +100,7 @@ Each service database (`database.enabled` in the chart) comes with a `PodMonitor
 
 It leaves out Kubernetes probes (`/healthz`, `/readyz`) and Prometheus scrapes (`/metrics`). Kubernetes calls the probes every few seconds, so they would otherwise swamp real traffic and make latency look better than it is. 4xx responses count as traffic but not as errors, because they are the caller's mistake.
 
-[tiny-bank / Ledger](http://localhost:3000/d/tiny-bank-ledger) shows what happens to money: journals posted per second, the share refused (the caller's fault) and failed (ours), posts by outcome, refusals by reason, and money moved per second by currency.
+[tiny-bank / Ledger](http://localhost:3000/d/tiny-bank-ledger) shows what happens to money: journals posted per second, the share refused (the caller's fault) and failed (ours), posts by outcome, refusals by reason, and money moved by currency: in each interval, and in total for the time range. "Money moved" is volume (each journal's positive entries), because the net is always zero. Every series the ledger can name starts at 0 when it starts, so Prometheus sees the first journal as an increase.
 
 The dashboards are JSON files in git ([services](../deploy/monitoring/dashboards/tiny-bank-services.json), [ledger](../deploy/monitoring/dashboards/tiny-bank-ledger.json)). `make dashboards` puts it in a ConfigMap labelled `grafana_dashboard=1`, and Grafana's sidecar container loads it within seconds. Under `make dev`, Tilt does this every time the file is saved.
 

@@ -58,3 +58,23 @@ func TestRecordCountsMoneyMovedOnlyByNewJournals(t *testing.T) {
 		t.Errorf("journals{unknown} = %v, want 1", got)
 	}
 }
+
+// TestMetricsStartAtZero: every currency's series exist before any journal,
+// so Prometheus sees the first one as an increase from 0.
+func TestMetricsStartAtZero(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	newMetrics(reg)
+	for _, name := range []string{"ledger_moved_minor_units_total", "ledger_journals_total"} {
+		n, err := testutil.GatherAndCount(reg, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := len(fundingAccounts) // moved: one per currency
+		if name == "ledger_journals_total" {
+			want *= 3 // posted, retried and failed
+		}
+		if n != want {
+			t.Errorf("%s has %d series before any journal, want %d at 0", name, n, want)
+		}
+	}
+}

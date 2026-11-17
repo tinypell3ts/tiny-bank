@@ -47,6 +47,18 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 		}, []string{"currency"}),
 	}
 	reg.MustRegister(m.journals, m.moved)
+
+	// Start every series we can name at 0. A counter that first appears
+	// already at 300 hides that first increase: Prometheus has no earlier
+	// sample to compare with, so rate() and increase() show 0 until the
+	// second journal. Refusal reasons can't all be listed here, so those
+	// series still start on first use.
+	for currency := range fundingAccounts { // one funding account per supported currency
+		m.moved.WithLabelValues(currency)
+		for _, outcome := range []string{outcomePosted, outcomeRetried, outcomeFailed} {
+			m.journals.WithLabelValues(currency, outcome, "")
+		}
+	}
 	return m
 }
 
