@@ -12,16 +12,22 @@ import (
 	"github.com/pressly/goose/v3/lock"
 )
 
+// migrationsDir is the folder inside fsys that Migrate reads.
+const migrationsDir = "migrations"
+
 // Migrate applies any migrations in fsys that the database doesn't have yet,
 // in order, and returns the files it applied. It's safe to call on every
 // startup: with nothing new to apply it does nothing.
 //
-// fsys holds goose SQL files at its root, named <version>_<name>.sql, like
-// 00001_create_accounts.sql. Services embed theirs:
+// fsys holds goose SQL files in a migrations/ folder, named
+// <version>_<name>.sql, like migrations/00001_create_accounts.sql. That's the
+// shape a service's embed gives, so it passes its embed straight in:
 //
 //	//go:embed migrations/*.sql
-//	var migrations embed.FS
-//	sub, _ := fs.Sub(migrations, "migrations")
+//	var migrationFiles embed.FS
+//
+// The embed has to be in the service: Go only embeds files from a package's
+// own folder.
 //
 // Several pods may start at once, so Migrate holds a Postgres advisory lock
 // while it runs. Only one pod migrates; the others wait (checking every
@@ -38,7 +44,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) ([]string, err
 	sqlDB := stdlib.OpenDBFromPool(pool)
 	defer func() { _ = sqlDB.Close() }() // closes the wrapper only, not the pool
 
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys, goose.WithSessionLocker(locker))
+	// goose wants the files at the root of the filesystem it's given.
+	dir, err := fs.Sub(fsys, migrationsDir)
+	if err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, dir, goose.WithSessionLocker(locker))
 	if err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}

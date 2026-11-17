@@ -5,10 +5,17 @@
 package dbtest
 
 import (
+	"context"
+	"io/fs"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 )
 
 // Image matches the Postgres version CloudNativePG runs on the cluster
@@ -37,4 +44,27 @@ func StartPostgres(t *testing.T, password string) string {
 		t.Fatalf("connection string: %v", err)
 	}
 	return url
+}
+
+// Migrated starts a throwaway Postgres, applies a service's migrations to it
+// with db.Migrate (the same code the service runs at startup), and returns a
+// pool on it. The pool is closed when the test ends.
+//
+// pkg/db's own tests can't use it, as this package imports pkg/db.
+func Migrated(t *testing.T, migrations fs.FS) *pgxpool.Pool {
+	t.Helper()
+	// Start Postgres first: pulling the image can be slow, and shouldn't use up
+	// the deadline for connecting and migrating.
+	url := StartPostgres(t, "s3cret")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	pool, err := db.Open(ctx, url)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := db.Migrate(ctx, pool, migrations); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return pool
 }

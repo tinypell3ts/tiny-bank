@@ -3,7 +3,7 @@
 // Integration tests run against a real Postgres in Docker, started by
 // testcontainers. Run them with `make test-integration`; plain `go test` and
 // `make check` skip this file because of the build tag above.
-package db
+package db_test
 
 import (
 	"context"
@@ -12,8 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 )
+
+// secret is the test database's password, which must never appear in an
+// error. These tests are in package db_test, so they don't share db_test.go's.
+const secret = "s3cret-password"
 
 // startPostgres runs a throwaway Postgres for one test and returns its URL.
 func startPostgres(t *testing.T) string {
@@ -26,7 +31,7 @@ func TestOpenConnectsAndQueries(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pool, err := Open(ctx, dsn)
+	pool, err := db.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -55,7 +60,7 @@ func TestOpenRejectsWrongPassword(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pool, err := Open(ctx, u.String())
+	pool, err := db.Open(ctx, u.String())
 	if err == nil {
 		pool.Close()
 		t.Fatal("Open succeeded with the wrong password")
