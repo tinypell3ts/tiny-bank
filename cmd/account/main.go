@@ -21,7 +21,9 @@ var run = db.Run("account", account.Migrations(), routes)
 
 func main() { kit.Main("account", run) }
 
-// routes is the account API, on the service's database.
-func routes(router *typhon.Router, pool *pgxpool.Pool) {
+// routes is the account API, on the service's database. It has no settings
+// of its own.
+func routes(router *typhon.Router, pool *pgxpool.Pool, _ func(string) string) error {
 	account.RegisterRoutes(router, account.NewStore(pool))
+	return nil
 }

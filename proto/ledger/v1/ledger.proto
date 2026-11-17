@@ -13,14 +13,24 @@ syntax = "proto3";
 //   GET  /journals/:id          -> Journal
 //   GET  /accounts/:id/balance  -> Balance
 //
+// Before moving money, the ledger checks every customer account with the
+// account service: it must exist, be open, and hold the journal's currency.
+// A retry (the same idempotency key) skips the checks and gets the first
+// journal, as its money has already moved.
+//
 // Errors are terrors:
-//   bad_request.idempotency_key, bad_request.currency, bad_request.entries
+//   bad_request.idempotency_key, bad_request.entries
+//   bad_request.currency: unsupported, or an account holds another currency
 //   precondition_failed.insufficient_funds: a customer account would go below zero
+//   precondition_failed.account_not_open: an account can't be used
 //   precondition_failed.idempotency_key: the key was used for a different journal
-//   not_found.journal, not_found.account
+//   not_found.account: an account doesn't exist (on POST), or the ledger has
+//     no record of it yet (on GET .../balance)
+//   not_found.journal
 //
 // A precondition_failed answer is final: retrying the same request gets the
-// same answer until something changes (the account receives money).
+// same answer until something changes (the account receives money). If the
+// account service can't be reached, the answer is a 500 and no money moves.
 package ledger.v1;
 
 import "google/protobuf/timestamp.proto";

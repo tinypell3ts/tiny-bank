@@ -91,7 +91,10 @@ func TestStartGivesUpWhenTheDatabaseNeverAnswers(t *testing.T) {
 }
 
 func TestRunRejectsBadConfig(t *testing.T) {
-	run := Run("test", fstest.MapFS{}, func(*typhon.Router, *pgxpool.Pool) { t.Error("routes added without a config") })
+	run := Run("test", fstest.MapFS{}, func(*typhon.Router, *pgxpool.Pool, func(string) string) error {
+		t.Error("routes added without a config")
+		return nil
+	})
 	err := run(t.Context(), func(string) string { return "" }, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL is required") {
 		t.Fatalf("err = %v, want the missing DATABASE_URL error", err)

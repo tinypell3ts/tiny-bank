@@ -5,22 +5,34 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/monzo/typhon"
+
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
+	"github.com/tinypell3ts/tiny-bank/services/account"
 )
 
-func post(t *testing.T, url, body string) (int, string) {
+// post sends body as JSON, with requestID as its X-Request-Id if set.
+func post(t *testing.T, url, body, requestID string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if requestID != "" {
+		req.Header.Set("X-Request-Id", requestID)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -33,48 +45,86 @@ func post(t *testing.T, url, body string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// TestLedgerAPIEndToEnd runs the real service against Postgres: it migrates,
-// takes money in from the GBP funding account, moves some on, refuses an
-// overdraft, and answers a retry with the first journal.
+// accountService runs the real account service's routes, on its own
+// Postgres, behind kit.Handler, and returns its URL and logs. The ledger
+// checks accounts with it.
+func accountService(t *testing.T) (string, *kittest.Logs) {
+	t.Helper()
+	router := typhon.Router{}
+	account.RegisterRoutes(&router, account.NewStore(dbtest.Migrated(t, account.Migrations())))
+	logs := &kittest.Logs{}
+	var ready atomic.Bool
+	ready.Store(true)
+	srv := httptest.NewServer(kit.Handler(kit.NewLogger(logs, slog.LevelInfo, "account"), obs.NewRegistry(), &router, &ready, nil))
+	t.Cleanup(srv.Close)
+	return srv.URL, logs
+}
+
+// openAccount opens a GBP account with the account service and returns its ID.
+func openAccount(t *testing.T, accountURL string) string {
+	t.Helper()
+	status, body := post(t, accountURL+"/accounts", `{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada","currency":"GBP"}`, "")
+	var acc struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &acc); status != http.StatusCreated || err != nil {
+		t.Fatalf("open account = %d %s", status, body)
+	}
+	return acc.ID
+}
+
+// TestLedgerAPIEndToEnd runs the real ledger against Postgres and a real
+// account service: it migrates, takes money in from the GBP funding account,
+// moves some on, refuses an overdraft and an account that doesn't exist, and
+// answers a retry with the first journal.
 func TestLedgerAPIEndToEnd(t *testing.T) {
+	accountURL, accountLogs := accountService(t)
+	alice, bob := openAccount(t, accountURL), openAccount(t, accountURL)
+
 	url := dbtest.StartPostgres(t, "s3cret")
-	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": url})
+	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": url, "ACCOUNT_URL": accountURL})
 	if !strings.Contains(logs.String(), `"applied":["00001_create_ledger.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
 
-	const (
-		funding = "00000000-0000-4000-8000-000000000826"
-		alice   = "a11ce000-0000-4000-8000-000000000001"
-		bob     = "b0b00000-0000-4000-8000-000000000002"
-	)
+	const funding = "00000000-0000-4000-8000-000000000826"
 	journal := func(key, from, to string, amount int) string {
 		return `{"idempotency_key":"` + key + `","currency":"GBP","entries":[` +
 			`{"account_id":"` + from + `","amount":-` + strconv.Itoa(amount) + `},{"account_id":"` + to + `","amount":` + strconv.Itoa(amount) + `}]}`
 	}
 
-	if status, body := post(t, base+"/journals", journal("deposit-1", funding, alice, 1000)); status != http.StatusCreated {
+	if status, body := post(t, base+"/journals", journal("deposit-1", funding, alice, 1000), "trace-me-1"); status != http.StatusCreated {
 		t.Fatalf("deposit = %d %s, want 201", status, body)
 	}
-	status, first := post(t, base+"/journals", journal("t1", alice, bob, 300))
+	// The ledger checked alice with the account service, passing our request ID on.
+	if !strings.Contains(accountLogs.String(), `"request_id":"trace-me-1"`) {
+		t.Errorf("the account service didn't see the ledger's request ID; its logs:\n%s", accountLogs)
+	}
+
+	status, first := post(t, base+"/journals", journal("t1", alice, bob, 300), "")
 	if status != http.StatusCreated {
 		t.Fatalf("transfer = %d %s, want 201", status, first)
 	}
-	if status, again := post(t, base+"/journals", journal("t1", alice, bob, 300)); status != http.StatusOK || again != first {
+	if status, again := post(t, base+"/journals", journal("t1", alice, bob, 300), ""); status != http.StatusOK || again != first {
 		t.Errorf("retry = %d %s, want 200 and the first journal %s", status, again, first)
 	}
-	if status, body := post(t, base+"/journals", journal("t2", alice, bob, 701)); status != http.StatusPreconditionFailed ||
+	if status, body := post(t, base+"/journals", journal("t2", alice, bob, 701), ""); status != http.StatusPreconditionFailed ||
 		!strings.Contains(body, "precondition_failed.insufficient_funds") {
 		t.Errorf("overdraft = %d %s, want 412 insufficient_funds", status, body)
 	}
+	typo := "b0b00000-0000-4000-8000-000000000002" // no such account
+	if status, body := post(t, base+"/journals", journal("t3", alice, typo, 100), ""); status != http.StatusNotFound ||
+		!strings.Contains(body, "not_found.account") {
+		t.Errorf("transfer to a missing account = %d %s, want 404 not_found.account", status, body)
+	}
 
-	for account, want := range map[string]string{alice: "700", bob: "300", funding: "-1000"} {
-		status, body := kittest.Get(t, base+"/accounts/"+account+"/balance")
+	for id, want := range map[string]string{alice: "700", bob: "300", funding: "-1000"} {
+		status, body := kittest.Get(t, base+"/accounts/"+id+"/balance")
 		var got struct {
 			Amount string `json:"amount"`
 		}
 		if err := json.Unmarshal([]byte(body), &got); status != http.StatusOK || err != nil || got.Amount != want {
-			t.Errorf("balance of %s = %d %s, want %s", account, status, body, want)
+			t.Errorf("balance of %s = %d %s, want %s", id, status, body, want)
 		}
 	}
 

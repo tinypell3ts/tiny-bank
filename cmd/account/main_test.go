@@ -11,5 +11,5 @@ import (
 // TestConformance checks the account service follows every rule services get
 // from pkg/kit: health, request IDs, errors and metrics.
 func TestConformance(t *testing.T) {
-	kittest.ConformanceOf(t, func(r *typhon.Router) { routes(r, nil) })
+	kittest.ConformanceOf(t, func(r *typhon.Router) { _ = routes(r, nil, nil) })
 }

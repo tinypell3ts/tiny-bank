@@ -14,8 +14,9 @@ import (
 	ledgerv1 "github.com/tinypell3ts/tiny-bank/proto/ledger/v1"
 )
 
-// Ledger is what the HTTP API needs from storage. *Store implements it; it's
-// an interface so handler tests can use a fake instead of Postgres.
+// Ledger is what the HTTP API needs. *Service implements it; it's an
+// interface so handler tests can use a fake instead of Postgres and the
+// account service.
 type Ledger interface {
 	Post(ctx context.Context, req NewJournal) (Journal, bool, error)
 	Journal(ctx context.Context, id uuid.UUID) (Journal, error)
@@ -32,11 +33,9 @@ type Ledger interface {
 // Handlers return terrors. kit.Handler turns them into responses (a terror's
 // code and message reach the caller), and logs and hides anything internal.
 //
-// There is no authentication yet, and the ledger doesn't yet check accounts
-// with the account service: any caller can move money between any accounts,
-// including ones that don't exist (a credit creates the ledger's record of
-// it). The service must stay internal (ClusterIP, no Ingress). Step 4 of
-// Phase 7 checks accounts are open and in the journal's currency.
+// There is no authentication yet: any caller can move money between any open
+// accounts (Service.Post checks each one with the account service). The
+// service must stay internal (ClusterIP, no Ingress).
 // TODO(phase-12): only the transaction service may post.
 func RegisterRoutes(router *typhon.Router, ledger Ledger) {
 	h := handler{ledger: ledger}

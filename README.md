@@ -66,7 +66,7 @@ curl -i -X POST localhost:8082/journals -H 'Content-Type: application/json' \
 curl localhost:8082/accounts/<account id>/balance
 ```
 
-Send the same request again and you get the same journal back with a 200: the idempotency key makes a retry safe. The ledger doesn't check accounts with the account service yet, so any UUID works for now.
+Send the same request again and you get the same journal back with a 200: the idempotency key makes a retry safe. The ledger checks each account with the account service first, so use the ID of an account you opened above.
 
 Without Tilt, for a one-off deploy:
 

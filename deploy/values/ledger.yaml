@@ -6,3 +6,7 @@ image:
 # passes DATABASE_URL to the service from the secret the operator generates.
 database:
   enabled: true
+config:
+  # Where the account service is: its Service's name, on port 80. The ledger
+  # checks every customer account with it before moving money.
+  ACCOUNT_URL: http://account

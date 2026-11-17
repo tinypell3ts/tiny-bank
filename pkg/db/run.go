@@ -15,8 +15,10 @@ import (
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
-// Routes adds a service's API to router, built on its database pool.
-type Routes func(router *typhon.Router, pool *pgxpool.Pool)
+// Routes adds a service's API to router, built on its database pool. getenv
+// reads any settings of the service's own (such as where another service
+// is); an error, like a missing setting, stops the service starting.
+type Routes func(router *typhon.Router, pool *pgxpool.Pool, getenv func(string) string) error
 
 // Run returns the whole of a service that has its own database, ready for
 // kit.Main, which calls it with the real environment and stdout:
@@ -50,7 +52,9 @@ func Run(name string, migrations fs.FS, routes Routes) func(ctx context.Context,
 		}
 
 		router := typhon.Router{}
-		routes(&router, pool)
+		if err := routes(&router, pool, getenv); err != nil {
+			return fmt.Errorf("routes: %w", err)
+		}
 		var ready atomic.Bool
 		h := kit.Handler(logger, obs.NewRegistry(), &router, &ready, pool.Ping)
 		return kit.Serve(ctx, ln, h, &ready, logger, cfg.ShutdownTimeout)

@@ -54,7 +54,15 @@ func (s *Store) Post(ctx context.Context, req NewJournal) (Journal, bool, error)
 		return postErr
 	})
 	if errors.Is(err, errAlreadyPosted) {
-		return s.replay(ctx, req)
+		j, found, err := s.posted(ctx, req)
+		if err == nil && !found {
+			// The key was taken a moment ago, and journals are never deleted.
+			err = errors.New("journal for a taken idempotency key not found")
+		}
+		if err != nil {
+			return Journal{}, false, fmt.Errorf("post journal: %w", err)
+		}
+		return j, false, nil
 	}
 	if err != nil {
 		return Journal{}, false, fmt.Errorf("post journal: %w", err)
@@ -167,24 +175,26 @@ func lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([]Balance, e
 	return balances, nil
 }
 
-// replay answers a post whose key is already taken: the stored journal if
-// req is the same request again, or an error if the key was used for
-// something else. Both are sorted by account ID, so they compare entry by
-// entry.
-func (s *Store) replay(ctx context.Context, req NewJournal) (Journal, bool, error) {
+// posted returns the journal already posted with req's idempotency key, if
+// there is one (found). If the key was used for a different request, it
+// returns errKeyReused instead. Both are sorted by account ID, so they compare
+// entry by entry.
+func (s *Store) posted(ctx context.Context, req NewJournal) (j Journal, found bool, err error) {
 	var id uuid.UUID
-	if err := s.pool.QueryRow(ctx, `SELECT id FROM journals WHERE idempotency_key = $1`, req.IdempotencyKey).Scan(&id); err != nil {
-		// The key was taken a moment ago, and journals are never deleted.
-		return Journal{}, false, fmt.Errorf("post journal: read journal for reused key: %w", err)
+	err = s.pool.QueryRow(ctx, `SELECT id FROM journals WHERE idempotency_key = $1`, req.IdempotencyKey).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Journal{}, false, nil
 	}
-	j, err := s.Journal(ctx, id)
 	if err != nil {
-		return Journal{}, false, fmt.Errorf("post journal: %w", err)
+		return Journal{}, false, fmt.Errorf("read journal for key: %w", err)
+	}
+	if j, err = s.Journal(ctx, id); err != nil {
+		return Journal{}, false, err
 	}
 	if !slices.Equal(j.Entries, req.Entries) {
-		return Journal{}, false, fmt.Errorf("post journal: %w", errKeyReused())
+		return Journal{}, false, errKeyReused()
 	}
-	return j, false, nil
+	return j, true, nil
 }
 
 // Journal returns the journal with id and its entries, or a terrors not_found.

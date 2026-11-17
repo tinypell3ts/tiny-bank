@@ -181,3 +181,14 @@ func errInsufficientFunds(id uuid.UUID) error {
 func errWrongCurrency(id uuid.UUID, c money.Currency) error {
 	return terrors.BadRequest("currency", "account "+id.String()+" holds "+c.Code(), nil)
 }
+
+// errNoSuchAccount is an entry for an account the account service doesn't
+// have, such as a mistyped ID.
+func errNoSuchAccount(id uuid.UUID) error {
+	return terrors.NotFound("account", "account "+id.String()+" doesn't exist", nil)
+}
+
+// errAccountNotOpen is an entry for an account that can't be used.
+func errAccountNotOpen(id uuid.UUID) error {
+	return terrors.PreconditionFailed("account_not_open", "account "+id.String()+" isn't open", nil)
+}

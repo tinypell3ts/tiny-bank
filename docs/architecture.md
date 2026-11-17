@@ -51,6 +51,7 @@ flowchart LR
         lsvc[Service ledger] --> lpod[Pod ledger<br/>POST /journals<br/>GET /accounts/id/balance]
         lpod -->|DATABASE_URL| ldb[(ledger-db<br/>CloudNativePG)]
         prom -->|scrapes| lpod
+        lpod -->|kit.Get /accounts/id<br/>binary protobuf| asvc
         subgraph cnpgns [namespace: cnpg-system]
             cnpg[CloudNativePG operator]
         end
@@ -72,6 +73,6 @@ flowchart LR
 - **Monitoring:** kube-prometheus-stack (Prometheus Operator, Prometheus, Grafana, kube-state-metrics) in the `monitoring` namespace, installed by `make monitoring`. See [observability.md](observability.md).
 - **Postgres:** the [CloudNativePG](https://cloudnative-pg.io) operator in `cnpg-system`, installed by `make cnpg`. It turns each `Cluster` object into a running Postgres, with its users, passwords, storage and failover. A service turns on `database.enabled` in its values file, and the shared chart gives it its own Postgres `Cluster` (`<name>-db`), with its connection string passed in as `DATABASE_URL`.
 - **Account service:** `cmd/account` plus `services/account`. It connects to `account-db` and applies its migrations before serving, and offers `POST /accounts` and `GET /accounts/:id` on Typhon, as JSON following its contract, `proto/account/v1`. It's internal only (ClusterIP, no sign-in) until the edge gateway.
-- **Ledger service:** `cmd/ledger` plus `services/ledger`, with its own `ledger-db`. It records every movement of money as a double-entry journal whose entries add up to zero, locking the accounts it touches so balances can't race, and takes an idempotency key so a retried request moves money once. It offers `POST /journals`, `GET /journals/:id` and `GET /accounts/:id/balance`, following `proto/ledger/v1`. Internal only, like the account service.
+- **Ledger service:** `cmd/ledger` plus `services/ledger`, with its own `ledger-db`. It records every movement of money as a double-entry journal whose entries add up to zero, locking the accounts it touches so balances can't race, and takes an idempotency key so a retried request moves money once. Before moving money it checks every customer account with the account service (`ACCOUNT_URL`, `http://account` on the cluster), the first call between services: binary protobuf through `kit.Get`, with the request ID passed on. It offers `POST /journals`, `GET /journals/:id` and `GET /accounts/:id/balance`, following `proto/ledger/v1`. Internal only, like the account service.
 
 See [ADR-0002](adr/0002-run-everything-in-docker-on-kubernetes.md) for why we run on Kubernetes, [ADR-0003](adr/0003-measure-services-with-prometheus-red-metrics.md) for how we measure services, and [deploy/AGENTS.md](../deploy/AGENTS.md) for the rules.
