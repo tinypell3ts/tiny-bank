@@ -10,6 +10,7 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
+	"go.opentelemetry.io/otel"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
@@ -53,6 +54,14 @@ func TestEachCheckCatchesItsRuleBeingBroken(t *testing.T) {
 		}()),
 		// metrics labelled by raw path
 		"metrics": rawPathMetrics(kitService()),
+		// tracing added by hand: a span named by raw path, ignoring the
+		// caller's traceparent, so every hop starts a trace of its own
+		// (probes still go to kit.Handler, so the check gets past that rule)
+		"tracing": overrideRoute(kitService(), unroutedPath, func(w http.ResponseWriter, r *http.Request) {
+			_, span := otel.Tracer("by-hand").Start(r.Context(), r.URL.Path)
+			span.End()
+			http.NotFound(w, r)
+		}),
 	}
 	for _, c := range checks {
 		h, ok := tests[c.name]
