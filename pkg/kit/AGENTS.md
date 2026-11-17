@@ -20,6 +20,7 @@ pkg/kit/
 ├── client.go     # Get and Post: call another service, binary protobuf, request ID passed on, read leniently, on a pool of at most 100 connections per service
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
 ├── idempotency.go # CheckIdempotencyKey: the one set of rules for a caller's idempotency key, shared by every service that takes one
+├── tracing.go    # tracingFilter: a server span per request, continuing the caller's traceparent; routeOf, shared with the metrics
 ├── deadline.go   # the caller's deadline (X-Request-Timeout), applied by Handler and passed on by Get and Post, minus a margin per hop
 ├── refusal.go    # Refusal: is this terror a refusal for good (a 4xx), or worth retrying? One answer for every service
 ├── serviceurl.go # ServiceURL: another service's base URL from a setting, checked at startup
@@ -32,12 +33,13 @@ pkg/kit/
 `Handler` wraps a service's router in filters, outermost first. The order matters, so keep it, and change it only with a test showing why:
 
 1. **Request ID**, so everything inside can log it.
-2. **Deadline**: the caller's `X-Request-Timeout`, capped at 30s, put on the request's context. When it passes, the request is answered 504 (clean errors tells a passed deadline, `context.DeadlineExceeded`, from a caller hanging up, `context.Canceled`, which stays 499).
-3. **Access log**, one line per request.
-4. **Metrics**, outside `ErrorFilter` so they see the final status. The route label comes from the routed request, or from `router.Pattern` when a response doesn't carry it (the 500 after a panic).
-5. **Typhon's `ErrorFilter`**, which turns a returned error into a response with the right status.
-6. **Clean errors**, just inside `ErrorFilter`, so the error it serialises is already safe: only a terror's code, message and params; stack and message chain stripped; anything else logged and replaced with a generic 500; 499 when the caller has gone.
-7. **Recover**, innermost, so a panic becomes an error the filters above handle like any other.
+2. **Tracing**: a server span per request (`tracing.go`), continuing the caller's `traceparent`, so the span covers everything below and the access log can carry its trace ID. Named and labelled like the metrics: method, route pattern (`routeOf`), status and the terror code, never a raw path. Only a 5xx marks it failed. Probes get no span.
+3. **Deadline**: the caller's `X-Request-Timeout`, capped at 30s, put on the request's context. When it passes, the request is answered 504 (clean errors tells a passed deadline, `context.DeadlineExceeded`, from a caller hanging up, `context.Canceled`, which stays 499).
+4. **Access log**, one line per request, with `request_id` and `trace_id`.
+5. **Metrics**, outside `ErrorFilter` so they see the final status. The route label comes from `routeOf`: the routed request, or `router.Pattern` when a response doesn't carry it (the 500 after a panic).
+6. **Typhon's `ErrorFilter`**, which turns a returned error into a response with the right status.
+7. **Clean errors**, just inside `ErrorFilter`, so the error it serialises is already safe: only a terror's code, message and params; stack and message chain stripped; anything else logged and replaced with a generic 500; 499 when the caller has gone.
+8. **Recover**, innermost, so a panic becomes an error the filters above handle like any other.
 
 `/metrics` sits beside the chain, so scrapes aren't counted as traffic. Every body is capped at `MaxBodyBytes` before Typhon sees the request.
 

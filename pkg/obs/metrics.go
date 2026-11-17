@@ -76,14 +76,15 @@ func (m *HTTPMetrics) Track() (done func(method, route string, status int)) {
 	start := time.Now()
 	return func(method, route string, status int) {
 		m.active.Dec()
-		m.duration.WithLabelValues(methodOf(method), routeOf(route), strconv.Itoa(status)).
+		m.duration.WithLabelValues(MethodLabel(method), RouteLabel(route), strconv.Itoa(status)).
 			Observe(time.Since(start).Seconds())
 	}
 }
 
-// routeOf is the route label: the pattern that matched, or "unmatched" when
-// nothing did (a 404), so unknown paths never become labels.
-func routeOf(pattern string) string {
+// RouteLabel is the route as a metric label or span attribute: the pattern
+// that matched, or "unmatched" when nothing did (a 404), so unknown paths
+// never become labels.
+func RouteLabel(pattern string) string {
 	if pattern == "" {
 		return "unmatched"
 	}
@@ -100,7 +101,9 @@ var knownMethods = map[string]bool{
 	http.MethodPost: true, http.MethodPut: true, http.MethodTrace: true,
 }
 
-func methodOf(method string) string {
+// MethodLabel is the method as a metric label or span attribute: a standard
+// method as it is, anything else "_OTHER" (see knownMethods).
+func MethodLabel(method string) string {
 	if knownMethods[method] {
 		return method
 	}

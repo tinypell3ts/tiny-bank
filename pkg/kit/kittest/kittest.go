@@ -9,6 +9,9 @@
 //     error ever carries a stack trace or source file path
 //   - GET /metrics serves the RED metrics, labelled by route pattern, never by
 //     raw path, and doesn't count its own scrapes
+//   - a request gets a server span that continues the caller's trace
+//     (traceparent), named by route pattern, never by raw path or the values
+//     in it, matched or not; probes get none
 //
 // A service runs it from a test on its routes, with ConformanceOf:
 //
@@ -35,13 +38,19 @@ import (
 	"testing"
 
 	"github.com/monzo/typhon"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // Conformance runs every check against handlers from newHandler, each as its
-// own subtest.
+// own subtest. Each handler's router must have the route addTracedRoute adds,
+// as ConformanceOf's do, so the tracing check can see a matched route.
 func Conformance(t *testing.T, newHandler func() http.Handler) {
 	t.Helper()
 	for _, c := range checks {
@@ -65,10 +74,25 @@ var checks = []check{
 	{"request ID", checkRequestID},
 	{"unknown routes", checkUnknownRoutes},
 	{"metrics", checkMetrics},
+	{"tracing", checkTracing},
 }
 
 // unroutedPath is a path no service will ever have.
 const unroutedPath = "/kittest-no-such-route"
+
+// tracedPattern is a route with a path parameter, and tracedPath a path it
+// matches, carrying a value (an account ID, say) that must never reach a
+// span: only the pattern may.
+const (
+	tracedPattern = "/kittest-traced/:id"
+	tracedPath    = "/kittest-traced/a11ce000-0000-4000-8000-000000000001"
+	tracedValue   = "a11ce000"
+)
+
+// addTracedRoute adds tracedPattern to router, answering 200.
+func addTracedRoute(router *typhon.Router) {
+	router.GET(tracedPattern, func(req typhon.Request) typhon.Response { return req.Response(map[string]string{}) })
+}
 
 func checkLiveness(h http.Handler) error {
 	rec := serve(h, http.MethodGet, "/healthz", nil)
@@ -171,6 +195,80 @@ func checkMetrics(h http.Handler) error {
 	return errors.Join(errs...)
 }
 
+// A caller's traceparent, for checkTracing.
+const (
+	callerTraceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
+	callerSpanID      = "00f067aa0ba902b7"
+	callerTraceparent = "00-" + callerTraceID + "-" + callerSpanID + "-01"
+)
+
+// checkTracing turns tracing on for the check, keeping spans in memory, and
+// puts the global tracer provider and propagator back afterwards.
+func checkTracing(h http.Handler) error {
+	exporter := tracetest.NewInMemoryExporter()
+	prevProvider, prevPropagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer func() {
+		otel.SetTracerProvider(prevProvider)
+		otel.SetTextMapPropagator(prevPropagator)
+	}()
+
+	serve(h, http.MethodGet, "/healthz", nil)
+	if n := len(exporter.GetSpans()); n != 0 {
+		return fmt.Errorf("GET /healthz made %d spans, want none: probes would bury real traffic", n)
+	}
+	serve(h, http.MethodGet, unroutedPath, http.Header{"Traceparent": {callerTraceparent}})
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		return fmt.Errorf("GET %s made %d spans, want one server span", unroutedPath, len(spans))
+	}
+	s := spans[0]
+	var errs []error
+	if s.SpanContext.TraceID().String() != callerTraceID || s.Parent.SpanID().String() != callerSpanID {
+		errs = append(errs, fmt.Errorf("the span is in trace %s under %s, want the caller's trace %s under its span %s",
+			s.SpanContext.TraceID(), s.Parent.SpanID(), callerTraceID, callerSpanID))
+	}
+	if s.SpanKind != trace.SpanKindServer || s.Name != "GET unmatched" {
+		errs = append(errs, fmt.Errorf("the span is %s %q, want a server span named GET unmatched", s.SpanKind, s.Name))
+	}
+	if carries(s, unroutedPath) {
+		errs = append(errs, errors.New("the span for an unmatched path carries the raw path: routes must be patterns, as in the metrics"))
+	}
+
+	// A matched route is named by its pattern, never by the values in its path.
+	exporter.Reset()
+	serve(h, http.MethodGet, tracedPath, nil)
+	if spans = exporter.GetSpans(); len(spans) != 1 {
+		return errors.Join(append(errs, fmt.Errorf("GET %s made %d spans, want one server span", tracedPath, len(spans)))...)
+	}
+	s = spans[0]
+	route := ""
+	for _, kv := range s.Attributes {
+		if kv.Key == "http.route" {
+			route = kv.Value.AsString()
+		}
+	}
+	if s.Name != "GET "+tracedPattern || route != tracedPattern || carries(s, tracedValue) {
+		errs = append(errs, fmt.Errorf("GET %s made span %q with http.route %q, want both to be the pattern %s and never the path's value",
+			tracedPath, s.Name, route, tracedPattern))
+	}
+	return errors.Join(errs...)
+}
+
+// carries reports whether s's name or any attribute contains text.
+func carries(s tracetest.SpanStub, text string) bool {
+	if strings.Contains(s.Name, text) {
+		return true
+	}
+	for _, kv := range s.Attributes {
+		if strings.Contains(kv.Value.String(), text) {
+			return true
+		}
+	}
+	return false
+}
+
 func serve(h http.Handler, method, path string, header http.Header) *httptest.ResponseRecorder {
 	req := httptest.NewRequestWithContext(context.Background(), method, path, nil)
 	for k, v := range header {
@@ -193,6 +291,7 @@ func ConformanceOf(t *testing.T, routes func(router *typhon.Router)) {
 	Conformance(t, func() http.Handler {
 		router := typhon.Router{}
 		routes(&router)
+		addTracedRoute(&router)
 		var ready atomic.Bool
 		ready.Store(true)
 		return kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, &ready, nil)
