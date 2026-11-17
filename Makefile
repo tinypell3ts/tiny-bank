@@ -24,7 +24,7 @@ CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdd
 # origin/main, because a CI checkout has no local main branch.
 PROTO_AGAINST ?= main
 
-.PHONY: help fmt fmt-check vet lint test test-integration test-scripts check hooks proto proto-check docker-build docker-smoke \
+.PHONY: help fmt fmt-check vet lint test test-integration test-scripts check load-journals hooks proto proto-check docker-build docker-smoke \
 	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down dev dev-down
 
 help: ## List targets
@@ -54,6 +54,12 @@ test-scripts: ## Test the shell scripts in scripts/
 	scripts/check-branch-name_test.sh
 
 check: fmt-check vet lint test test-scripts proto-check ## Everything CI runs
+
+RATE     ?= 5
+DURATION ?= 1m
+ARGS     ?=
+load-journals: ## Post RATE random journals a second for DURATION to the ledger (needs make dev), e.g. RATE=20 DURATION=5m; more flags in ARGS (-h lists them)
+	go run ./tools/journalload -rate $(RATE) -duration $(DURATION) $(ARGS)
 
 proto: ## Regenerate the Go code from proto/ (run after changing a .proto file)
 	find proto -name '*.pb.go' -delete
