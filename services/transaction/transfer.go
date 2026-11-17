@@ -66,11 +66,6 @@ type Transfer struct {
 	UpdatedAt      time.Time
 }
 
-// maxAmount bounds one transfer, as the ledger bounds one entry: 10^12 minor
-// units, £10 billion. The ledger would refuse more anyway; checking here
-// refuses it before anything is saved.
-const maxAmount = 1_000_000_000_000
-
 // NewTransfer is a request to move money.
 type NewTransfer struct {
 	IdempotencyKey string
@@ -84,7 +79,7 @@ func invalid(field, message string) error { return terrors.BadRequest(field, mes
 
 // Validate checks the rules that don't need the ledger: a good key, a known
 // kind, accounts that make sense for it, and an amount from 1 minor unit to
-// maxAmount. Whether the money is there and the accounts are open is the
+// money.MaxAmount. Whether the money is there and the accounts are open is the
 // ledger's to decide.
 //
 // Each error's code is the request field it's about (bad_request.account_id
@@ -119,7 +114,7 @@ func (t NewTransfer) Validate() error {
 	if t.Amount.Currency() == (money.Currency{}) {
 		return invalid("currency", "currency is required")
 	}
-	if a := t.Amount.Amount(); a < 1 || a > maxAmount {
+	if a := t.Amount.Amount(); a < 1 || a > money.MaxAmount {
 		return invalid("amount", "amount must be from 1 to 1000000000000 minor units")
 	}
 	return nil

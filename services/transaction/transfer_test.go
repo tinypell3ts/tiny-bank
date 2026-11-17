@@ -33,7 +33,7 @@ func TestValidate(t *testing.T) {
 	}{
 		{"a transfer", transferReq("t1", alice, bob, 300), ""},
 		{"a deposit", depositReq("d1", alice, 1000), ""},
-		{"the largest amount", transferReq("t1", alice, bob, maxAmount), ""},
+		{"the largest amount", transferReq("t1", alice, bob, money.MaxAmount), ""},
 
 		{"no key", transferReq("", alice, bob, 300), "bad_request.idempotency_key"},
 		{"an unknown kind", NewTransfer{IdempotencyKey: "t1", Kind: "refund", From: alice, To: bob, Amount: gbp(300)}, "bad_request.kind"},
@@ -45,7 +45,7 @@ func TestValidate(t *testing.T) {
 		{"no currency", NewTransfer{IdempotencyKey: "t1", Kind: KindTransfer, From: alice, To: bob}, "bad_request.currency"},
 		{"zero", transferReq("t1", alice, bob, 0), "bad_request.amount"},
 		{"negative", transferReq("t1", alice, bob, -300), "bad_request.amount"},
-		{"over the limit", transferReq("t1", alice, bob, maxAmount+1), "bad_request.amount"},
+		{"over the limit", transferReq("t1", alice, bob, money.MaxAmount+1), "bad_request.amount"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

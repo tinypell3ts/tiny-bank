@@ -4,61 +4,37 @@ package main
 
 import (
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
-	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
-	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 	"github.com/tinypell3ts/tiny-bank/services/account"
 )
 
 // post sends body as JSON, with requestID as its X-Request-Id if set.
 func post(t *testing.T, url, body, requestID string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	var header http.Header
 	if requestID != "" {
-		req.Header.Set("X-Request-Id", requestID)
+		header = http.Header{"X-Request-Id": {requestID}}
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp.StatusCode, string(b)
+	status, _, got := kittest.Post(t, url, body, header)
+	return status, got
 }
 
 // accountService runs the real account service's routes, on its own
-// Postgres, behind kit.Handler, and returns its URL and logs. The ledger
-// checks accounts with it.
+// Postgres, and returns its URL and logs. The ledger checks accounts with it.
 func accountService(t *testing.T) (string, *kittest.Logs) {
 	t.Helper()
-	router := typhon.Router{}
-	account.RegisterRoutes(&router, account.NewStore(dbtest.Migrated(t, account.Migrations())))
-	logs := &kittest.Logs{}
-	var ready atomic.Bool
-	ready.Store(true)
-	srv := httptest.NewServer(kit.Handler(kit.NewLogger(logs, slog.LevelInfo, "account"), obs.NewRegistry(), &router, &ready, nil))
-	t.Cleanup(srv.Close)
-	return srv.URL, logs
+	return kittest.Serve(t, "account", func(r *typhon.Router) {
+		account.RegisterRoutes(r, account.NewStore(dbtest.Migrated(t, account.Migrations())))
+	})
 }
 
 // openAccount opens a GBP account with the account service and returns its ID.

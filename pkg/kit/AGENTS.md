@@ -21,9 +21,10 @@ pkg/kit/
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
 ├── idempotency.go # CheckIdempotencyKey: the one set of rules for a caller's idempotency key, shared by every service that takes one
 ├── deadline.go   # the caller's deadline (X-Request-Timeout), applied by Handler and passed on by Get and Post, minus a margin per hop
+├── refusal.go    # Refusal: is this terror a refusal for good (a 4xx), or worth retrying? One answer for every service
 ├── serviceurl.go # ServiceURL: another service's base URL from a setting, checked at startup
 ├── uuid.go       # ParseUUID: caller text to a UUID, canonical form only, so one thing has one URL
-└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start and Get run a real service in integration tests
+└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start runs a real service, Serve runs routes as a service for one under test to call, and Get and Post send it requests, in integration tests
 ```
 
 ## The filter chain

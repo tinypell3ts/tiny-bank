@@ -1,13 +1,10 @@
 package ledger
 
 import (
-	"errors"
-	"strings"
-
-	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/funding"
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -29,14 +26,6 @@ const (
 	outcomeRefused = "refused" // the caller's request broke a rule (a 4xx): nothing moved
 	outcomeFailed  = "failed"  // something went wrong on our side (a 5xx): nothing moved
 )
-
-// callersFault are the terror classes that mean the request was refused (a
-// 4xx), not that the ledger failed.
-var callersFault = map[string]bool{
-	terrors.ErrBadRequest:         true,
-	terrors.ErrNotFound:           true,
-	terrors.ErrPreconditionFailed: true,
-}
 
 func newMetrics(reg prometheus.Registerer) *metrics {
 	m := &metrics{
@@ -111,13 +100,12 @@ func outcomeOf(created bool, err error) (outcome, reason string) {
 		}
 		return outcomeRetried, ""
 	}
-	var terr *terrors.Error
-	if errors.As(err, &terr) && callersFault[strings.SplitN(terr.Code, ".", 2)[0]] {
+	if code, ok := kit.Refusal(err); ok {
 		// The code is a small, fixed set: every code the ledger returns is a
 		// constant in its own code, never built from what a caller sent, and
 		// the account service's codes are turned into the ledger's own before
 		// they get here (AccountService.Account).
-		return outcomeRefused, terr.Code
+		return outcomeRefused, code
 	}
 	return outcomeFailed, ""
 }

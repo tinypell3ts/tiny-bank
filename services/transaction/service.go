@@ -65,28 +65,19 @@ func (s *Service) attempt(ctx context.Context, t Transfer) (Transfer, error) {
 			return t, fmt.Errorf("start attempt: %w", err)
 		}
 		journalID, postErr := s.ledger.Post(ctx, t)
-
-		// The ledger has answered: save that even if our caller has hung up
-		// since, so a transfer it posted isn't left looking pending.
-		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
-		switch reason, final, bug := refused(postErr); {
-		case postErr == nil:
-			t, err = s.Complete(finishCtx, t.ID, journalID)
-			cancel()
-			return t, err
-		case final:
-			t, err = s.Fail(finishCtx, t.ID, reason)
-			cancel()
-			return t, err
-		case bug:
-			cancel()
+		switch result, reason := outcomeOf(postErr); result {
+		case posted:
+			return s.record(ctx, func(ctx context.Context) (Transfer, error) { return s.Complete(ctx, t.ID, journalID) })
+		case refusedForGood:
+			return s.record(ctx, func(ctx context.Context) (Transfer, error) { return s.Fail(ctx, t.ID, reason) })
+		case keyReused:
 			// Our own internal error, with the ledger's kept as its cause for
 			// the logs: wrapping the ledger's 412 would tell our caller their
 			// key was reused, which isn't so.
-			return t, terrors.NewInternalWithCause(fmt.Errorf("transfer %s: %w: %s", t.ID, errBug, postErr.Error()),
+			return t, terrors.NewInternalWithCause(
+				fmt.Errorf("transfer %s: the ledger says its key was used for a different journal: %s", t.ID, postErr.Error()),
 				"couldn't post this transfer to the ledger", nil, "ledger_key_reused")
 		}
-		cancel()
 
 		// We can't tell whether the money moved, so try again, with the same
 		// key, if there's time. Otherwise it stays pending for later.
@@ -95,6 +86,14 @@ func (s *Service) attempt(ctx context.Context, t Transfer) (Transfer, error) {
 		}
 	}
 	return t, nil
+}
+
+// record saves the ledger's answer with save, even if our caller has hung up
+// since, so a transfer the ledger posted isn't left looking pending.
+func (s *Service) record(ctx context.Context, save func(context.Context) (Transfer, error)) (Transfer, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	defer cancel()
+	return save(ctx)
 }
 
 // backoff is how long to wait before try number try+1: a random time up to

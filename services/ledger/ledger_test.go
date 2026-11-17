@@ -49,8 +49,8 @@ func TestValidate(t *testing.T) {
 		{"zero amount", "k1", []Entry{{alice, gbp(0)}, {bob, gbp(0)}}, "bad_request.entries"},
 		{"no account", "k1", []Entry{{uuid.Nil(), gbp(-500)}, {bob, gbp(500)}}, "bad_request.entries"},
 		{"same account twice", "k1", []Entry{{alice, gbp(-500)}, {alice, gbp(500)}}, "bad_request.entries"},
-		{"amount at the limit", "k1", []Entry{{alice, gbp(-maxAmount)}, {bob, gbp(maxAmount)}}, ""},
-		{"amount over the limit", "k1", []Entry{{alice, gbp(-maxAmount - 1)}, {bob, gbp(maxAmount + 1)}}, "bad_request.entries"},
+		{"amount at the limit", "k1", []Entry{{alice, gbp(-money.MaxAmount)}, {bob, gbp(money.MaxAmount)}}, ""},
+		{"amount over the limit", "k1", []Entry{{alice, gbp(-money.MaxAmount - 1)}, {bob, gbp(money.MaxAmount + 1)}}, "bad_request.entries"},
 		{"would overflow", "k1", []Entry{{alice, gbp(math.MaxInt64)}, {bob, gbp(1)}, {carol, gbp(math.MinInt64)}}, "bad_request.entries"},
 	}
 	for _, tt := range tests {

@@ -2,9 +2,7 @@ package transaction
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"uuid"
 
 	"github.com/monzo/terrors"
@@ -66,32 +64,39 @@ func journalFor(t Transfer) (*ledgerv1.PostJournalRequest, error) {
 	}, nil
 }
 
-// errBug is the ledger saying this transfer's key was used for a different
-// journal. The transaction service builds a transfer's journal the same way
-// every time, so this can only be a bug: it's never retried, and never
-// marked failed (the money may have moved under the other journal).
-var errBug = errors.New("the ledger says this transfer's key was used for a different journal: a bug")
+// outcome is what a post's answer means for a transfer.
+type outcome int
 
-// refused tells what the ledger's answer err means for a transfer:
-//
-//   - final: the ledger refused it for good (a 4xx that a retry can't change,
-//     like insufficient funds or an account that isn't open), with reason,
-//     the ledger's terror code, to record on the failed transfer
-//   - errBug: the key was reused for a different journal (see errBug)
-//   - otherwise (a timeout, a 5xx, no connection, an answer that didn't
-//     make sense): we can't tell whether the money moved, so try again with
-//     the same key
-func refused(err error) (reason string, final bool, bug bool) {
-	var terr *terrors.Error
-	if !errors.As(err, &terr) {
-		return "", false, false
+const (
+	// posted: the ledger posted it, so the money moved.
+	posted outcome = iota
+	// refusedForGood: the ledger refused it with a 4xx a retry can't change,
+	// like insufficient funds or an account that isn't open.
+	refusedForGood
+	// keyReused: the ledger says this transfer's key was used for a different
+	// journal. A transfer's journal is built the same way every time, so this
+	// is a bug: never retried, and never marked failed, as the money may have
+	// moved under the other journal.
+	keyReused
+	// unsure: a timeout, a 5xx, no connection, an answer that didn't make
+	// sense. The money may or may not have moved, so try again, same key.
+	unsure
+)
+
+// outcomeOf says what err, the ledger's answer to a post, means, and for a
+// refusal, its terror code to record on the failed transfer. It decides
+// refusals with kit.Refusal, as the ledger's own metrics do, so the two
+// services agree on what a refusal is.
+func outcomeOf(err error) (outcome, string) {
+	if err == nil {
+		return posted, ""
 	}
-	if terr.Code == "precondition_failed.idempotency_key" {
-		return "", false, true
+	code, ok := kit.Refusal(err)
+	switch {
+	case ok && code == "precondition_failed.idempotency_key":
+		return keyReused, ""
+	case ok:
+		return refusedForGood, code
 	}
-	switch strings.SplitN(terr.Code, ".", 2)[0] {
-	case terrors.ErrBadRequest, terrors.ErrNotFound, terrors.ErrPreconditionFailed:
-		return terr.Code, true, false
-	}
-	return "", false, false
+	return unsure, ""
 }

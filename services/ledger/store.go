@@ -109,7 +109,7 @@ func insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, err
 		sum, err := b.Amount.Add(e.Amount)
 		if err != nil {
 			// The currencies match, so this is an overflow. Entries are capped
-			// at maxAmount, so a balance needs millions of huge journals to get
+			// at money.MaxAmount, so a balance needs millions of huge journals to get
 			// here: a fault, not one caller's mistake.
 			return Journal{}, fmt.Errorf("account %s: %w", e.AccountID, err)
 		}

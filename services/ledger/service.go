@@ -89,7 +89,7 @@ func checkAccounts(ctx context.Context, accounts Accounts, entries []Entry) erro
 	errs := make([]error, len(entries))
 	var wg sync.WaitGroup
 	for i, e := range entries {
-		if isFunding(e.AccountID) {
+		if funding.Is(e.AccountID) {
 			continue
 		}
 		wg.Go(func() { errs[i] = checkAccount(ctx, accounts, e) })
@@ -115,10 +115,6 @@ func checkAccount(ctx context.Context, accounts Accounts, e Entry) error {
 		return errWrongCurrency(e.AccountID, info.Currency)
 	}
 	return nil
-}
-
-func isFunding(id uuid.UUID) bool {
-	return funding.Is(id)
 }
 
 // Accounts is what the ledger needs to know about customer accounts. The

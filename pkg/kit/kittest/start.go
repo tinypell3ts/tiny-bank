@@ -3,13 +3,21 @@ package kittest
 import (
 	"context"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/monzo/typhon"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // Logs collects a service's log lines. The service writes from its own
@@ -108,4 +116,45 @@ func freePort(t *testing.T) string {
 	defer func() { _ = ln.Close() }()
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	return port
+}
+
+// Serve runs routes behind kit.Handler on a test server, ready, as a real
+// service runs, for a test that needs another service to call (the ledger's
+// tests run a real account service this way). name is the service name in
+// its log lines, which come back in logs. The server stops when the test ends.
+func Serve(t *testing.T, name string, routes func(router *typhon.Router)) (url string, logs *Logs) {
+	t.Helper()
+	router := typhon.Router{}
+	routes(&router)
+	logs = &Logs{}
+	var ready atomic.Bool
+	ready.Store(true)
+	srv := httptest.NewServer(kit.Handler(kit.NewLogger(logs, slog.LevelInfo, name), obs.NewRegistry(), &router, &ready, nil))
+	t.Cleanup(srv.Close)
+	return srv.URL, logs
+}
+
+// Post sends body to url as JSON, with header's values too if it isn't nil,
+// and returns the answer's status, headers and body. It reads and closes the
+// response itself.
+func Post(t *testing.T, url, body string, header http.Header) (int, http.Header, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range header {
+		req.Header[k] = v
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, resp.Header, string(b)
 }

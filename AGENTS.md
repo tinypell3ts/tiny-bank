@@ -82,7 +82,7 @@ Current:
 ├── pkg/db/              # Postgres: Run (a whole database service), LoadConfig (kit.Config + DATABASE_URL), Start (connect with retries, then migrate), Open a pgx pool, Migrate with goose behind an advisory lock
 │   └── dbtest/          # StartPostgres for integration tests (testcontainers)
 ├── pkg/funding/         # the ledger's funding accounts (one per currency, fixed IDs): where deposits come from
-├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow
+├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow; MaxAmount, the largest single movement
 ├── proto/               # protobuf contracts (buf), one versioned package per service API, plus generated Go
 ├── deploy/
 │   ├── kind/            # local kind cluster config

@@ -60,11 +60,6 @@ const (
 	// maxEntries bounds how many accounts one journal locks. A transfer needs
 	// two; a few more covers fees.
 	maxEntries = 10
-	// maxAmount bounds one entry: 10^12 minor units, £10 billion. Without a
-	// bound, a few huge journals could take a balance near the int64 limit,
-	// after which every post to that account would overflow. With it, a
-	// balance needs millions of maximum-size journals to get there.
-	maxAmount = 1_000_000_000_000
 )
 
 // NewJournal is a request to move money.
@@ -113,8 +108,8 @@ func (j NewJournal) Validate() (NewJournal, error) {
 		}
 		if a := e.Amount.Amount(); a == 0 {
 			return NewJournal{}, invalid("entries", "an entry's amount must not be zero")
-		} else if a > maxAmount || a < -maxAmount {
-			return NewJournal{}, invalid("entries", fmt.Sprintf("an entry's amount must be at most %d minor units either way", maxAmount))
+		} else if a > money.MaxAmount || a < -money.MaxAmount {
+			return NewJournal{}, invalid("entries", fmt.Sprintf("an entry's amount must be at most %d minor units either way", money.MaxAmount))
 		}
 		var err error
 		if total, err = total.Add(e.Amount); err != nil {

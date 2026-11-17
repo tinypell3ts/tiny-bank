@@ -25,6 +25,7 @@ func TestOutcomeOf(t *testing.T) {
 		{"a bad journal", false, fmt.Errorf("post journal: %w", invalid("entries", "x")), "refused", "bad_request.entries"},
 		{"an account that doesn't exist", false, errNoSuchAccount(alice), "refused", "not_found.account"},
 		{"the account service failing", false, terrors.NewInternalWithCause(errors.New("down"), "x", nil, "account_service"), "failed", ""},
+		{"the caller's deadline passing", false, terrors.Timeout("deadline", "x", nil), "failed", ""},
 		{"a plain error", false, errors.New("database gone"), "failed", ""},
 	}
 	for _, tt := range tests {

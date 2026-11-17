@@ -4,57 +4,29 @@ package main
 
 import (
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/monzo/typhon"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
-	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
-	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 	"github.com/tinypell3ts/tiny-bank/services/account"
 	"github.com/tinypell3ts/tiny-bank/services/ledger"
 )
 
-// post sends body as JSON and returns the status, headers and body. It reads
-// and closes the response itself.
 func post(t *testing.T, url, body string) (int, http.Header, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp.StatusCode, resp.Header, string(b)
+	return kittest.Post(t, url, body, nil)
 }
 
-// startService runs routes behind kit.Handler on a test server, as a real
-// service runs, and returns its URL.
-func startService(t *testing.T, routes func(*typhon.Router)) string {
+// startService runs routes as a service, for the transaction service to call.
+func startService(t *testing.T, name string, routes func(*typhon.Router)) string {
 	t.Helper()
-	router := typhon.Router{}
-	routes(&router)
-	var ready atomic.Bool
-	ready.Store(true)
-	srv := httptest.NewServer(kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, &ready, nil))
-	t.Cleanup(srv.Close)
-	return srv.URL
+	url, _ := kittest.Serve(t, name, routes)
+	return url
 }
 
 type transferBody struct {
@@ -79,10 +51,10 @@ func decode(t *testing.T, body string) transferBody {
 // some, answers a retry with the same transfer, and records a refusal as a
 // failed transfer, and the ledger's balances agree.
 func TestTransactionAPIEndToEnd(t *testing.T) {
-	accountURL := startService(t, func(r *typhon.Router) {
+	accountURL := startService(t, "account", func(r *typhon.Router) {
 		account.RegisterRoutes(r, account.NewStore(dbtest.Migrated(t, account.Migrations())))
 	})
-	ledgerURL := startService(t, func(r *typhon.Router) {
+	ledgerURL := startService(t, "ledger", func(r *typhon.Router) {
 		store := ledger.NewStore(dbtest.Migrated(t, ledger.Migrations()))
 		ledger.RegisterRoutes(r, ledger.NewService(store, ledger.AccountService{BaseURL: accountURL}, prometheus.NewRegistry()))
 	})

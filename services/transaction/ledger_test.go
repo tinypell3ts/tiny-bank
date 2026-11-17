@@ -39,27 +39,27 @@ func TestJournalFor(t *testing.T) {
 	}
 }
 
-func TestRefused(t *testing.T) {
+func TestOutcomeOf(t *testing.T) {
 	tests := []struct {
-		name               string
-		err                error
-		wantReason         string
-		wantFinal, wantBug bool
+		name       string
+		err        error
+		want       outcome
+		wantReason string
 	}{
-		{"insufficient funds", terrors.PreconditionFailed("insufficient_funds", "x", nil), "precondition_failed.insufficient_funds", true, false},
-		{"an account that isn't open", terrors.PreconditionFailed("account_not_open", "x", nil), "precondition_failed.account_not_open", true, false},
-		{"an account that doesn't exist", terrors.NotFound("account", "x", nil), "not_found.account", true, false},
-		{"a bad journal", terrors.BadRequest("entries", "x", nil), "bad_request.entries", true, false},
-		{"our key reused for another journal", terrors.PreconditionFailed("idempotency_key", "x", nil), "", false, true},
-		{"the ledger failing", terrors.InternalService("account_service", "x", nil), "", false, false},
-		{"a timeout", terrors.Timeout("deadline", "x", nil), "", false, false},
-		{"no connection", errors.New("connection refused"), "", false, false},
+		{"posted", nil, posted, ""},
+		{"insufficient funds", terrors.PreconditionFailed("insufficient_funds", "x", nil), refusedForGood, "precondition_failed.insufficient_funds"},
+		{"an account that isn't open", terrors.PreconditionFailed("account_not_open", "x", nil), refusedForGood, "precondition_failed.account_not_open"},
+		{"an account that doesn't exist", terrors.NotFound("account", "x", nil), refusedForGood, "not_found.account"},
+		{"a bad journal", terrors.BadRequest("entries", "x", nil), refusedForGood, "bad_request.entries"},
+		{"our key reused for another journal", terrors.PreconditionFailed("idempotency_key", "x", nil), keyReused, ""},
+		{"the ledger failing", terrors.InternalService("account_service", "x", nil), unsure, ""},
+		{"a timeout", terrors.Timeout("deadline", "x", nil), unsure, ""},
+		{"no connection", errors.New("connection refused"), unsure, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason, final, bug := refused(tt.err)
-			if reason != tt.wantReason || final != tt.wantFinal || bug != tt.wantBug {
-				t.Errorf("refused = %q, %v, %v; want %q, %v, %v", reason, final, bug, tt.wantReason, tt.wantFinal, tt.wantBug)
+			if got, reason := outcomeOf(tt.err); got != tt.want || reason != tt.wantReason {
+				t.Errorf("outcomeOf = %v, %q; want %v, %q", got, reason, tt.want, tt.wantReason)
 			}
 		})
 	}
