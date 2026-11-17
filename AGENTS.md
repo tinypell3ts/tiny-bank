@@ -42,9 +42,9 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`, `build`, `perf`
   ```
 
   Never mark it ready for review yourself. The human does that once the whole piece of work is pushed, and that's when Greptile reviews.
-- **Labels:** one type label, plus an `area:` label for each part the PR changes.
-  - Type: `enhancement` (a `feat`), `bug` (a `fix`) or `documentation` (docs only). Add `security` when it changes a security control, a known gap or `docs/security.md`.
-  - Area: `area: ledger`, `area: account`, `area: kit`, `area: db`, `area: money`, `area: proto`, `area: observability`, `area: deploy`, `area: ci`. A new service gets its own `area:` label, created with the service.
+- **Labels:** a type label from the PR title's Conventional Commit type, plus an `area:` label for each part the PR changes.
+  - Type: `feat` → `enhancement`, `fix` → `bug`, `docs` → `documentation`. The other types (`refactor`, `test`, `chore`, `ci`, `build`, `perf`) get no type label: the title already says what kind of change it is. Add `security` to any PR that changes a security control, a known gap or `docs/security.md`.
+  - Area: `area: ledger`, `area: account`, `area: kit`, `area: db`, `area: money`, `area: proto`, `area: observability`, `area: deploy`, `area: ci` (GitHub Actions, the Makefile, `scripts/`). A new service gets its own `area:` label, created with the service. A PR that only changes repo-wide files (`README.md`, `AGENTS.md`, `.github/` templates) gets no `area:` label.
 - **The description** follows [the template](.github/pull_request_template.md), in plain language. Keep it current, unasked, after each step is pushed: what's done and what's next, the "How to review" table (one row per commit, what to read closely, what to skip), and the "How to check it works" commands. Use code paths, not relative links: in a PR description they resolve against the PR's own URL.
 - **Greptile gates each push once the PR is ready.** After each push, check its review and any unresolved threads (`reviewThreads` and `isResolved` in the GraphQL API). Fix the valid findings, and once the human has pushed the fix, reply to each thread naming the fix commit and how it was tested, then resolve it. Don't start the next step while a review is pending or a thread is open.
 
