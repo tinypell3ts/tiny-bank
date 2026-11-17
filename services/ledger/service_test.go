@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -8,12 +9,14 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"uuid"
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
+	"github.com/tinypell3ts/tiny-bank/pkg/money"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 	accountv1 "github.com/tinypell3ts/tiny-bank/proto/account/v1"
 )
@@ -87,5 +90,55 @@ func TestAccountServiceWhenItsDown(t *testing.T) {
 	srv.Close()
 	if _, err := (AccountService{BaseURL: srv.URL}).Account(t.Context(), alice); err == nil {
 		t.Fatal("want an error when the account service is down")
+	}
+}
+
+// TestOnlyTheServiceCanBeTheLedger: the Store mustn't satisfy Ledger, or it
+// could be wired into the routes on its own and post without account checks.
+func TestOnlyTheServiceCanBeTheLedger(t *testing.T) {
+	var _ Ledger = (*Service)(nil)
+	if _, ok := any(&Store{}).(Ledger); ok {
+		t.Error("*Store implements Ledger: it can be wired in without the Service's account checks")
+	}
+}
+
+// slowAccounts answers every lookup after a delay, as a slow account service
+// would. bad accounts don't exist.
+type slowAccounts struct {
+	delay time.Duration
+	bad   map[uuid.UUID]bool
+}
+
+func (s slowAccounts) Account(ctx context.Context, id uuid.UUID) (AccountInfo, error) {
+	time.Sleep(s.delay)
+	if s.bad[id] {
+		return AccountInfo{}, errNoSuchAccount(id)
+	}
+	return AccountInfo{Open: true, Currency: money.GBP()}, nil
+}
+
+func TestCheckAccountsAtOnce(t *testing.T) {
+	entries := manyEntries(maxEntries) // ten customer accounts
+	start := time.Now()
+	if err := checkAccounts(t.Context(), slowAccounts{delay: 200 * time.Millisecond}, entries); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("checking %d accounts took %v; want about one lookup's time, not one per account", len(entries), took)
+	}
+}
+
+func TestCheckAccountsReportsTheFirstFailureInOrder(t *testing.T) {
+	j, err := NewJournal{IdempotencyKey: "k", Entries: []Entry{{alice, gbp(-550)}, {bob, gbp(500)}, {carol, gbp(50)}}}.Validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := slowAccounts{bad: map[uuid.UUID]bool{bob: true, carol: true}}
+	for range 20 { // goroutines finish in any order; the answer mustn't
+		err := checkAccounts(t.Context(), accounts, j.Entries)
+		var terr *terrors.Error
+		if !errors.As(err, &terr) || !strings.Contains(terr.Message, bob.String()) {
+			t.Fatalf("err = %v, want bob's, the first failing account in ID order", err)
+		}
 	}
 }

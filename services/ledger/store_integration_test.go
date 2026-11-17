@@ -28,6 +28,16 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+// postJournal validates req and posts it with the Store, without the
+// Service's account checks: these tests are about the Store's own rules.
+func postJournal(s *Store, ctx context.Context, req NewJournal) (Journal, bool, error) {
+	req, err := req.Validate()
+	if err != nil {
+		return Journal{}, false, fmt.Errorf("post journal: %w", err)
+	}
+	return s.postValid(ctx, req)
+}
+
 // checkInvariants checks the two rules double-entry bookkeeping promises:
 // every currency's balances add up to zero (money only moves), and every
 // balance equals the sum of its account's entries (the stored balance never
@@ -65,7 +75,7 @@ func gbpFunding(t *testing.T) uuid.UUID {
 // fund moves minor pence into account from outside the bank.
 func fund(t *testing.T, s *Store, account uuid.UUID, minor int64) {
 	t.Helper()
-	if _, _, err := s.Post(t.Context(), NewJournal{
+	if _, _, err := postJournal(s, t.Context(), NewJournal{
 		IdempotencyKey: "fund-" + uuid.New().String(),
 		Entries:        []Entry{{gbpFunding(t), gbp(-minor)}, {account, gbp(minor)}},
 	}); err != nil {
@@ -146,7 +156,7 @@ func TestPostMovesMoney(t *testing.T) {
 	s := newTestStore(t)
 	fund(t, s, alice, 1000)
 
-	j, created, err := s.Post(t.Context(), transfer("t1", alice, bob, 300))
+	j, created, err := postJournal(s, t.Context(), transfer("t1", alice, bob, 300))
 	if err != nil || !created {
 		t.Fatalf("Post = %v, created %v; want a new journal", err, created)
 	}
@@ -171,7 +181,7 @@ func TestPostRefusesAnOverdraft(t *testing.T) {
 	// aaron sorts before alice, so his credit is worked out before alice's
 	// debit is refused. All of it must be undone, down to his new account row.
 	aaron := uuid.MustParse("0aa00000-0000-4000-8000-000000000004")
-	_, _, err := s.Post(t.Context(), transfer("t1", alice, aaron, 101))
+	_, _, err := postJournal(s, t.Context(), transfer("t1", alice, aaron, 101))
 	wantCode(t, err, "precondition_failed.insufficient_funds")
 	wantBalance(t, s, alice, gbp(100))
 	_, err = s.Balance(t.Context(), aaron)
@@ -180,7 +190,7 @@ func TestPostRefusesAnOverdraft(t *testing.T) {
 	// A refused post doesn't use up its key, so once there's money the same
 	// request can go through.
 	fund(t, s, alice, 1)
-	if _, created, err := s.Post(t.Context(), transfer("t1", alice, aaron, 101)); err != nil || !created {
+	if _, created, err := postJournal(s, t.Context(), transfer("t1", alice, aaron, 101)); err != nil || !created {
 		t.Fatalf("retry after funding = %v, created %v; want it posted", err, created)
 	}
 	wantBalance(t, s, alice, gbp(0))
@@ -191,7 +201,7 @@ func TestPostRefusesAnotherCurrency(t *testing.T) {
 	fund(t, s, alice, 100) // alice's account now holds GBP
 	eurFunding, _ := FundingAccount(money.EUR())
 
-	_, _, err := s.Post(t.Context(), NewJournal{IdempotencyKey: "e1", Entries: []Entry{
+	_, _, err := postJournal(s, t.Context(), NewJournal{IdempotencyKey: "e1", Entries: []Entry{
 		{eurFunding, money.New(-100, money.EUR())}, {alice, money.New(100, money.EUR())},
 	}})
 	wantCode(t, err, "bad_request.currency")
@@ -199,21 +209,21 @@ func TestPostRefusesAnotherCurrency(t *testing.T) {
 
 func TestPostRefusesInvalidJournals(t *testing.T) {
 	s := newTestStore(t)
-	_, _, err := s.Post(t.Context(), NewJournal{IdempotencyKey: "k1", Entries: []Entry{{alice, gbp(1)}, {bob, gbp(1)}}})
+	_, _, err := postJournal(s, t.Context(), NewJournal{IdempotencyKey: "k1", Entries: []Entry{{alice, gbp(1)}, {bob, gbp(1)}}})
 	wantCode(t, err, "bad_request.entries")
 }
 
 func TestPostIsIdempotent(t *testing.T) {
 	s := newTestStore(t)
 	fund(t, s, alice, 1000)
-	first, _, err := s.Post(t.Context(), transfer("t1", alice, bob, 300))
+	first, _, err := postJournal(s, t.Context(), transfer("t1", alice, bob, 300))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// The same request again, as after a timeout: the first journal, and no
 	// money moves.
-	again, created, err := s.Post(t.Context(), transfer("t1", alice, bob, 300))
+	again, created, err := postJournal(s, t.Context(), transfer("t1", alice, bob, 300))
 	if err != nil || created || again.ID != first.ID {
 		t.Fatalf("retry = %v, created %v, ID %s; want the first journal %s", err, created, again.ID, first.ID)
 	}
@@ -221,12 +231,12 @@ func TestPostIsIdempotent(t *testing.T) {
 
 	// Entries in another order are still the same request.
 	reordered := NewJournal{IdempotencyKey: "t1", Entries: []Entry{{bob, gbp(300)}, {alice, gbp(-300)}}}
-	if again, created, err := s.Post(t.Context(), reordered); err != nil || created || again.ID != first.ID {
+	if again, created, err := postJournal(s, t.Context(), reordered); err != nil || created || again.ID != first.ID {
 		t.Fatalf("reordered retry = %v, created %v; want the first journal", err, created)
 	}
 
 	// The same key for a different request is a caller bug.
-	_, _, err = s.Post(t.Context(), transfer("t1", alice, bob, 301))
+	_, _, err = postJournal(s, t.Context(), transfer("t1", alice, bob, 301))
 	wantCode(t, err, "precondition_failed.idempotency_key")
 	wantBalance(t, s, alice, gbp(700))
 }
@@ -264,7 +274,7 @@ func TestConcurrentPostsNeverOverdraw(t *testing.T) {
 	fund(t, s, alice, 1000)
 
 	errs := runConcurrently(50, func(i int) error {
-		_, _, err := s.Post(t.Context(), transfer(fmt.Sprintf("t%d", i), alice, bob, 30))
+		_, _, err := postJournal(s, t.Context(), transfer(fmt.Sprintf("t%d", i), alice, bob, 30))
 		return err
 	})
 	var posted, refused int
@@ -300,7 +310,7 @@ func TestOppositeTransfersDontDeadlock(t *testing.T) {
 		if i%2 == 1 {
 			from, to = bob, alice
 		}
-		_, _, err := s.Post(t.Context(), transfer(fmt.Sprintf("t%d", i), from, to, 10))
+		_, _, err := postJournal(s, t.Context(), transfer(fmt.Sprintf("t%d", i), from, to, 10))
 		return err
 	})
 	if err := errors.Join(errs...); err != nil {
@@ -320,7 +330,7 @@ func TestConcurrentRetriesPostOnce(t *testing.T) {
 	var mu sync.Mutex
 	var created int
 	errs := runConcurrently(len(ids), func(i int) error {
-		j, c, err := s.Post(t.Context(), transfer("same-key", alice, bob, 300))
+		j, c, err := postJournal(s, t.Context(), transfer("same-key", alice, bob, 300))
 		ids[i] = j.ID
 		if c {
 			mu.Lock()

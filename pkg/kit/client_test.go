@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,38 @@ func TestGetFailsWhenTheOtherServiceIsDown(t *testing.T) {
 
 	if err := Get(t.Context(), url+"/thing", &apipb.Mixin{}); err == nil {
 		t.Fatal("Get to a service that's down succeeded")
+	}
+}
+
+// TestGetCapsErrorBodies: an error response's body is read by Typhon's
+// ErrorFilter, and for one that isn't a terror it becomes the error message.
+// It must be capped like any other body, not read whole.
+func TestGetCapsErrorBodies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(strings.Repeat("x", 4*maxResponseBytes))) // a huge error page from a proxy, say
+	}))
+	t.Cleanup(srv.Close)
+
+	err := Get(t.Context(), srv.URL+"/thing", &apipb.Mixin{})
+	if err == nil {
+		t.Fatal("want an error for a 502")
+	}
+	if n := len(err.Error()); n > maxResponseBytes+1024 {
+		t.Errorf("error message is %d bytes; want the body capped at about %d", n, maxResponseBytes)
+	}
+}
+
+func TestGetRefusesATooLargeResponse(t *testing.T) {
+	base := otherService(t, func(r *typhon.Router) {
+		r.GET("/thing", func(req typhon.Request) typhon.Response {
+			return Respond(req, &typepb.Type{Name: strings.Repeat("x", maxResponseBytes)}, http.StatusOK)
+		})
+	})
+	err := Get(t.Context(), base+"/thing", &apipb.Mixin{})
+	var terr *terrors.Error
+	if !errors.As(err, &terr) || terr.Code != "bad_response.too_large" {
+		t.Fatalf("err = %v, want bad_response.too_large", err)
 	}
 }

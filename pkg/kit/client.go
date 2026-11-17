@@ -26,6 +26,10 @@ const (
 // client sends requests to other tiny-bank services. It's Typhon's HTTP
 // client with these filters, innermost first:
 //
+//   - capBody limits every response body to maxResponseBytes+1, before
+//     anything reads it. ErrorFilter reads an error response's whole body
+//     (and makes it the error's message if it isn't a terror), so without
+//     this a huge error page would be read into memory and logged in full.
 //   - ErrorFilter turns an error response back into the terror the other
 //     service returned, code and params included (ADR-0007)
 //   - ErrorFilter again, because the first one loses transport errors (a
@@ -36,9 +40,27 @@ const (
 //   - forwardRequestID passes the current request's ID on, so one request's
 //     log lines can be followed across every service it touches
 var client = typhon.Client.
+	Filter(capBody).
 	Filter(typhon.ErrorFilter).
 	Filter(typhon.ErrorFilter).
 	Filter(forwardRequestID)
+
+// capBody limits the response's body to maxResponseBytes+1 bytes. Get reads
+// one byte more than the cap, so it can tell a body that's too large from one
+// exactly at it.
+func capBody(req typhon.Request, next typhon.Service) typhon.Response {
+	rsp := next(req)
+	if rsp.Response != nil && rsp.Body != nil {
+		rsp.Body = cappedBody{Reader: io.LimitReader(rsp.Body, maxResponseBytes+1), Closer: rsp.Body}
+	}
+	return rsp
+}
+
+// cappedBody reads from a limited reader but closes the real body.
+type cappedBody struct {
+	io.Reader
+	io.Closer
+}
 
 // forwardRequestID sets X-Request-Id on an outgoing request to the ID of the
 // request being handled, which kit.Handler stored in the context.
@@ -73,7 +95,7 @@ func Get(ctx context.Context, url string, m proto.Message) error {
 	if mediaType, _, _ := mime.ParseMediaType(rsp.Header.Get("Content-Type")); mediaType != protobufType {
 		return fmt.Errorf("get %s: %w", url, terrors.BadResponse("content_type", "response isn't binary protobuf", nil))
 	}
-	b, err := io.ReadAll(io.LimitReader(rsp.Body, maxResponseBytes+1))
+	b, err := io.ReadAll(rsp.Body) // capped at maxResponseBytes+1 by capBody
 	if err != nil {
 		return fmt.Errorf("get %s: read response: %w", url, err)
 	}

@@ -46,45 +46,42 @@ const (
 	retryEvery = 2 * time.Second
 )
 
-// Start is how a database service starts: it connects to url, retrying until
-// the database answers, then applies migrations (see Migrate), all within
-// StartupTimeout or ctx, whichever ends first. It returns the pool, which the
-// caller closes on shutdown.
+// Start is how a database service gets its database ready: it waits until
+// pool's database answers, retrying, then applies migrations (see Migrate),
+// all within StartupTimeout or ctx, whichever ends first.
 //
 // Doing both before serving means a service never takes traffic with an old
 // schema. A new pod can start before its brand-new database is up, so a few
-// failed attempts are normal; each is logged (Open's errors never include
-// the password).
-func Start(ctx context.Context, logger *slog.Logger, url string, migrations fs.FS) (*pgxpool.Pool, error) {
+// failed attempts are normal; each is logged (pgx's errors never include the
+// password).
+func Start(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool, migrations fs.FS) error {
 	ctx, cancel := context.WithTimeout(ctx, StartupTimeout)
 	defer cancel()
 
-	pool, err := connect(ctx, logger, url)
-	if err != nil {
-		return nil, err
+	if err := waitFor(ctx, logger, pool); err != nil {
+		return err
 	}
 	applied, err := Migrate(ctx, pool, migrations)
 	if err != nil {
-		pool.Close()
-		return nil, err
+		return err
 	}
 	logger.Info("database migrated", "applied", applied)
-	return pool, nil
+	return nil
 }
 
-func connect(ctx context.Context, logger *slog.Logger, url string) (*pgxpool.Pool, error) {
+func waitFor(ctx context.Context, logger *slog.Logger, pool *pgxpool.Pool) error {
 	for {
-		pool, err := Open(ctx, url)
+		err := pool.Ping(ctx)
 		if err == nil {
-			return pool, nil
+			return nil
 		}
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("database not reachable before startup timeout: %w", err)
+			return fmt.Errorf("database not reachable before startup timeout: %w", err)
 		}
 		logger.Warn("database not ready, retrying", "error", err.Error(), "retry_in", retryEvery.String())
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("database not reachable before startup timeout: %w", errors.Join(err, ctx.Err()))
+			return fmt.Errorf("database not reachable before startup timeout: %w", errors.Join(err, ctx.Err()))
 		case <-time.After(retryEvery):
 		}
 	}

@@ -35,23 +35,24 @@ const accountColumns = "id, kind, currency, balance"
 // It never leaves Post.
 var errAlreadyPosted = errors.New("idempotency key already used")
 
-// Post moves the money in req, all of it or none of it, and returns the
+// postValid moves the money in req, all of it or none of it, and returns the
 // journal. created is false when req is a retry of a journal already posted
 // with the same key: nothing moves again, and the first journal is returned.
+//
+// req must already be validated (NewJournal.Validate): its entries sorted and
+// adding up to zero. It's unexported, so Service.Post, which validates and
+// checks the accounts first, is the only way to post. Nothing can wire the
+// Store in on its own and skip the checks.
 //
 // Two posts that share an account run one after the other: each locks the
 // accounts it touches (SELECT ... FOR UPDATE) until it commits. They lock in
 // account ID order, so two posts can't each hold an account the other needs
 // and wait for ever (a deadlock).
-func (s *Store) Post(ctx context.Context, req NewJournal) (Journal, bool, error) {
-	req, err := req.Validate()
-	if err != nil {
-		return Journal{}, false, fmt.Errorf("post journal: %w", err)
-	}
+func (s *Store) postValid(ctx context.Context, req NewJournal) (Journal, bool, error) {
 	var j Journal
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var postErr error
-		j, postErr = post(ctx, tx, req)
+		j, postErr = insertJournal(ctx, tx, req)
 		return postErr
 	})
 	if errors.Is(err, errAlreadyPosted) {
@@ -71,7 +72,9 @@ func (s *Store) Post(ctx context.Context, req NewJournal) (Journal, bool, error)
 	return j, true, nil
 }
 
-func post(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, error) {
+// insertJournal claims req's idempotency key, locks and checks its accounts,
+// and writes the journal, inside postValid's transaction.
+func insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, error) {
 	currency := req.Entries[0].Amount.Currency()
 	j := Journal{IdempotencyKey: req.IdempotencyKey, Currency: currency, Entries: req.Entries}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"uuid"
 
 	"github.com/monzo/terrors"
@@ -44,29 +45,49 @@ func NewService(store *Store, accounts Accounts, reg prometheus.Registerer) *Ser
 // can't close, that can't matter.
 func (s *Service) Post(ctx context.Context, req NewJournal) (j Journal, created bool, err error) {
 	defer func() { s.metrics.record(req, j, created, err) }()
-	return s.post(ctx, req)
+	return s.checkAndPost(ctx, req)
 }
 
-func (s *Service) post(ctx context.Context, req NewJournal) (Journal, bool, error) {
+// checkAndPost validates req, answers a retry with its first journal, checks
+// the accounts, and posts. Post wraps it so every return is counted.
+func (s *Service) checkAndPost(ctx context.Context, req NewJournal) (Journal, bool, error) {
 	req, err := req.Validate()
 	if err != nil {
 		return Journal{}, false, fmt.Errorf("post journal: %w", err)
 	}
-	if j, found, err := s.posted(ctx, req); err != nil || found {
-		if err != nil {
-			return Journal{}, false, fmt.Errorf("post journal: %w", err)
-		}
+	j, found, err := s.posted(ctx, req)
+	if err != nil {
+		return Journal{}, false, fmt.Errorf("post journal: %w", err)
+	}
+	if found {
 		return j, false, nil
 	}
-	for _, e := range req.Entries {
+	if err := checkAccounts(ctx, s.accounts, req.Entries); err != nil {
+		return Journal{}, false, fmt.Errorf("post journal: %w", err)
+	}
+	return s.postValid(ctx, req)
+}
+
+// checkAccounts checks every customer account in entries at once, so a post
+// waits for one lookup's time (at most kit.Get's 5 seconds), not one per
+// account. If several fail, the error is the first entry's, in account ID
+// order, so the same request always gets the same answer.
+func checkAccounts(ctx context.Context, accounts Accounts, entries []Entry) error {
+	errs := make([]error, len(entries))
+	var wg sync.WaitGroup
+	for i, e := range entries {
 		if isFunding(e.AccountID) {
 			continue
 		}
-		if err := checkAccount(ctx, s.accounts, e); err != nil {
-			return Journal{}, false, fmt.Errorf("post journal: %w", err)
+		wg.Go(func() { errs[i] = checkAccount(ctx, accounts, e) })
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
 		}
 	}
-	return s.Store.Post(ctx, req)
+	return nil
 }
 
 func checkAccount(ctx context.Context, accounts Accounts, e Entry) error {

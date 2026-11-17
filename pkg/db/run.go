@@ -39,10 +39,17 @@ type Routes func(router *typhon.Router, deps Deps) error
 //
 //	func main() { kit.Main("ledger", run) }
 //
-// It does, in order: load config (LoadConfig), start JSON logs, connect and
-// migrate (Start), add the service's routes, then serve them behind
-// kit.Handler until ctx ends, with /readyz checking the database. Tests run
-// the same function with kittest.Start.
+// It does, in order: load config (LoadConfig), start JSON logs, add the
+// service's routes on a pool that hasn't connected yet, wait for the database
+// and migrate it (Start), then listen and serve the routes behind kit.Handler
+// until ctx ends, with /readyz checking the database. Tests run the same
+// function with kittest.Start.
+//
+// Routes come before the database, so a bad setting of the service's own
+// (a missing ACCOUNT_URL, say) stops it at once, before it waits up to
+// StartupTimeout for a database or migrates one. Routes must only keep the
+// pool, not query it. The port is opened last, so nothing is left listening
+// when a step fails.
 func Run(name string, migrations fs.FS, routes Routes) func(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	return func(ctx context.Context, getenv func(string) string, out io.Writer) error {
 		cfg, err := LoadConfig(getenv)
@@ -51,22 +58,26 @@ func Run(name string, migrations fs.FS, routes Routes) func(ctx context.Context,
 		}
 		logger := kit.NewLogger(out, cfg.LogLevel, name)
 
-		pool, err := Start(ctx, logger, cfg.DatabaseURL.Reveal(), migrations) // the one place the password is used
+		pool, err := newPool(ctx, cfg.DatabaseURL.Reveal()) // the one place the password is used
 		if err != nil {
 			return err
 		}
 		defer pool.Close() // after Serve returns, so in-flight requests can finish their queries
 
-		var lc net.ListenConfig
-		ln, err := lc.Listen(ctx, "tcp", ":"+cfg.Port)
-		if err != nil {
-			return fmt.Errorf("listen: %w", err)
-		}
-
 		router := typhon.Router{}
 		reg := obs.NewRegistry()
 		if err := routes(&router, Deps{Pool: pool, Getenv: getenv, Metrics: reg}); err != nil {
 			return fmt.Errorf("routes: %w", err)
+		}
+
+		if err := Start(ctx, logger, pool, migrations); err != nil {
+			return err
+		}
+
+		var lc net.ListenConfig
+		ln, err := lc.Listen(ctx, "tcp", ":"+cfg.Port)
+		if err != nil {
+			return fmt.Errorf("listen: %w", err)
 		}
 		var ready atomic.Bool
 		h := kit.Handler(logger, reg, &router, &ready, pool.Ping)

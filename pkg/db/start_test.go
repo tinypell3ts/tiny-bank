@@ -2,9 +2,11 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -77,7 +79,12 @@ func TestStartGivesUpWhenTheDatabaseNeverAnswers(t *testing.T) {
 	var logs strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 
-	_, err := Start(ctx, logger, "postgres://app:"+secret+"@127.0.0.1:1/app?sslmode=disable", fstest.MapFS{})
+	pool, err := newPool(ctx, "postgres://app:"+secret+"@127.0.0.1:1/app?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	err = Start(ctx, logger, pool, fstest.MapFS{})
 	if err == nil || !strings.Contains(err.Error(), "database not reachable before startup timeout") {
 		t.Fatalf("err = %v, want the startup timeout error", err)
 	}
@@ -97,5 +104,38 @@ func TestRunRejectsBadConfig(t *testing.T) {
 	err := run(t.Context(), func(string) string { return "" }, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL is required") {
 		t.Fatalf("err = %v, want the missing DATABASE_URL error", err)
+	}
+}
+
+// TestRunStopsAtABadSettingBeforeTheDatabase: a service's own setting is
+// checked at once, not after waiting for (and migrating) its database, and a
+// failed start leaves nothing listening.
+func TestRunStopsAtABadSettingBeforeTheDatabase(t *testing.T) {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	_ = ln.Close()
+
+	run := Run("test", fstest.MapFS{}, func(*typhon.Router, Deps) error { return errors.New("ACCOUNT_URL is required") })
+	env := map[string]string{
+		"PORT":         port,
+		"DATABASE_URL": "postgres://app:" + secret + "@127.0.0.1:1/app?sslmode=disable", // nothing listens there
+	}
+	var logs strings.Builder
+	start := time.Now()
+	err = run(t.Context(), func(k string) string { return env[k] }, &logs)
+	if err == nil || !strings.Contains(err.Error(), "ACCOUNT_URL is required") {
+		t.Fatalf("err = %v, want the routes' setting error", err)
+	}
+	if took := time.Since(start); took > time.Second || strings.Contains(logs.String(), "retrying") {
+		t.Errorf("took %v, logs %s: want it to stop before trying the database", took, logs.String())
+	}
+	if ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:"+port); err != nil {
+		t.Errorf("port %s is still in use after a failed start: %v", port, err)
+	} else {
+		_ = ln.Close()
 	}
 }
