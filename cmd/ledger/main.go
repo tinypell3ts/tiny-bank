@@ -7,9 +7,6 @@
 package main
 
 import (
-	"errors"
-	"net/url"
-
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
@@ -27,24 +24,11 @@ func main() { kit.Main("ledger", run) }
 // deploy/values/ledger.yaml): the ledger checks every customer account with
 // it before moving money.
 func routes(router *typhon.Router, deps db.Deps) error {
-	accountURL, err := baseURL(deps.Getenv("ACCOUNT_URL"))
+	accountURL, err := kit.ServiceURL(deps.Getenv, "ACCOUNT_URL")
 	if err != nil {
 		return err
 	}
 	accounts := ledger.AccountService{BaseURL: accountURL}
 	ledger.RegisterRoutes(router, ledger.NewService(ledger.NewStore(deps.Pool), accounts, deps.Metrics))
 	return nil
-}
-
-// baseURL checks raw is an http(s) URL with a host and nothing after it, so
-// a typo stops the service starting instead of failing every post.
-func baseURL(raw string) (string, error) {
-	if raw == "" {
-		return "", errors.New("ACCOUNT_URL is required")
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
-		return "", errors.New("ACCOUNT_URL must be an http(s) URL with just a host, like http://account")
-	}
-	return u.Scheme + "://" + u.Host, nil
 }

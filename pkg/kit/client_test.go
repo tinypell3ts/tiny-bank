@@ -84,9 +84,14 @@ func TestGetRefusesANonProtobufResponse(t *testing.T) {
 }
 
 func TestGetEndsWithTheCallersContext(t *testing.T) {
+	// The server never answers, not even when the deadline it was sent passes
+	// (a hung service), so the caller's own context has to end the call, and
+	// the transport error must come back as an error, not a success.
+	hung := make(chan struct{})
 	base := otherService(t, func(r *typhon.Router) {
-		r.GET("/slow", func(req typhon.Request) typhon.Response { <-req.Done(); return req.Response(nil) })
+		r.GET("/slow", func(req typhon.Request) typhon.Response { <-hung; return req.Response(nil) })
 	})
+	t.Cleanup(func() { close(hung) })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()

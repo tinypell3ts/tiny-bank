@@ -8,6 +8,8 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 )
 
 func TestOutcomeOf(t *testing.T) {
@@ -69,7 +71,7 @@ func TestMetricsStartAtZero(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := len(fundingAccounts) // moved: one per currency
+		want := len(funding.All()) // moved: one per currency
 		if name == "ledger_journals_total" {
 			want *= 3 // posted, retried and failed
 		}

@@ -13,8 +13,9 @@ import (
 	transactionv1 "github.com/tinypell3ts/tiny-bank/proto/transaction/v1"
 )
 
-// Transfers is what the HTTP API needs. *Store implements it for now; it's an
-// interface so handler tests can use a fake instead of Postgres.
+// Transfers is what the HTTP API needs. *Service implements it; it's an
+// interface so handler tests can use a fake instead of Postgres and the
+// ledger.
 type Transfers interface {
 	Create(ctx context.Context, req NewTransfer) (Transfer, bool, error)
 	Get(ctx context.Context, id uuid.UUID) (Transfer, error)

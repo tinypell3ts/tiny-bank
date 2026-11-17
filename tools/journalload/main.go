@@ -55,7 +55,7 @@ const (
 var requestTimeout = 10 * time.Second
 
 // gbpFunding is the ledger's GBP funding account, where money from outside
-// the bank comes from (ledger.FundingAccount).
+// the bank comes from (funding.Account in pkg/funding).
 const gbpFunding = "00000000-0000-4000-8000-000000000826"
 
 type config struct {

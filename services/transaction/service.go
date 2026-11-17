@@ -1,0 +1,134 @@
+package transaction
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"time"
+
+	"github.com/monzo/terrors"
+)
+
+const (
+	// attemptsPerRequest is how many times a request tries the ledger before
+	// answering "pending". The rest is left to the background finisher, so a
+	// caller never waits long.
+	attemptsPerRequest = 3
+	// backoffBase and backoffMax shape the wait between attempts: about
+	// 50ms, then 100ms, then 200ms, never more than 1s, each a random part of
+	// that (jitter), so many transfers failing at once don't all retry in
+	// step and hit the ledger together.
+	backoffBase = 50 * time.Millisecond
+	backoffMax  = time.Second
+	// finishTimeout bounds saving the ledger's answer once it's back.
+	finishTimeout = 5 * time.Second
+)
+
+// Service is the transaction service: the Store, plus posting each pending
+// transfer to the ledger until it's completed or failed. It has the Store's
+// Get, and its own Create.
+type Service struct {
+	*Store
+	ledger Ledger
+}
+
+// NewService returns the transaction service, saving transfers in store and
+// posting them to ledger.
+func NewService(store *Store, ledger Ledger) *Service {
+	return &Service{Store: store, ledger: ledger}
+}
+
+// Create saves req as a transfer (or finds the one already saved with its
+// key) and, if it's pending, posts it to the ledger, retrying what can be
+// retried within ctx's deadline and attemptsPerRequest. It returns the
+// transfer as it now stands: completed, failed, or still pending if the
+// ledger couldn't be reached or didn't answer in time.
+func (s *Service) Create(ctx context.Context, req NewTransfer) (Transfer, bool, error) {
+	t, created, err := s.Store.Create(ctx, req)
+	if err != nil || t.State != StatePending {
+		return t, created, err
+	}
+	t, err = s.attempt(ctx, t)
+	return t, created, err
+}
+
+// attempt posts pending transfer t to the ledger, up to attemptsPerRequest
+// times, and records the outcome. Before each try it records the attempt and
+// when to try again (nextAttemptAfter), so if this service dies mid-call the
+// transfer is still found and finished later. Every try uses the transfer's
+// own ID as the ledger's idempotency key, so the money moves at most once.
+func (s *Service) attempt(ctx context.Context, t Transfer) (Transfer, error) {
+	for try := range attemptsPerRequest {
+		var err error
+		if t, err = s.StartAttempt(ctx, t.ID, nextAttemptAfter(t.Attempts+1)); err != nil {
+			return t, fmt.Errorf("start attempt: %w", err)
+		}
+		journalID, postErr := s.ledger.Post(ctx, t)
+
+		// The ledger has answered: save that even if our caller has hung up
+		// since, so a transfer it posted isn't left looking pending.
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+		switch reason, final, bug := refused(postErr); {
+		case postErr == nil:
+			t, err = s.Complete(finishCtx, t.ID, journalID)
+			cancel()
+			return t, err
+		case final:
+			t, err = s.Fail(finishCtx, t.ID, reason)
+			cancel()
+			return t, err
+		case bug:
+			cancel()
+			// Our own internal error, with the ledger's kept as its cause for
+			// the logs: wrapping the ledger's 412 would tell our caller their
+			// key was reused, which isn't so.
+			return t, terrors.NewInternalWithCause(fmt.Errorf("transfer %s: %w: %s", t.ID, errBug, postErr.Error()),
+				"couldn't post this transfer to the ledger", nil, "ledger_key_reused")
+		}
+		cancel()
+
+		// We can't tell whether the money moved, so try again, with the same
+		// key, if there's time. Otherwise it stays pending for later.
+		if try == attemptsPerRequest-1 || !sleep(ctx, backoff(try)) {
+			break
+		}
+	}
+	return t, nil
+}
+
+// backoff is how long to wait before try number try+1: a random time up to
+// backoffBase × 2^try, capped at backoffMax ("full jitter").
+func backoff(try int) time.Duration {
+	ceiling := min(backoffBase<<try, backoffMax)
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(ceiling)))
+	if err != nil {
+		return ceiling // crypto/rand doesn't fail on supported platforms; waiting the most is safe
+	}
+	return time.Duration(n.Int64())
+}
+
+// nextAttemptAfter is how long after starting attempt number attempts a
+// transfer is due to be tried again, if that attempt doesn't finish it:
+// longer than any one call can take, and doubling each time, from 10s up to
+// 5 minutes, so a transfer the ledger keeps refusing to answer isn't retried
+// in a tight loop.
+func nextAttemptAfter(attempts int) time.Duration {
+	return min(10*time.Second<<min(attempts-1, 10), 5*time.Minute)
+}
+
+// sleep waits for d, and reports false if ctx ends first, or would end
+// before d is up (there'd be no time left to try again).
+func sleep(ctx context.Context, d time.Duration) bool {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < d {
+		return false
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}

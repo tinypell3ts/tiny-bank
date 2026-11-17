@@ -10,6 +10,7 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 	accountv1 "github.com/tinypell3ts/tiny-bank/proto/account/v1"
@@ -117,12 +118,7 @@ func checkAccount(ctx context.Context, accounts Accounts, e Entry) error {
 }
 
 func isFunding(id uuid.UUID) bool {
-	for _, f := range fundingAccounts {
-		if f == id {
-			return true
-		}
-	}
-	return false
+	return funding.Is(id)
 }
 
 // Accounts is what the ledger needs to know about customer accounts. The

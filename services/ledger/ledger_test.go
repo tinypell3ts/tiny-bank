@@ -9,6 +9,7 @@ import (
 
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
@@ -95,11 +96,11 @@ func TestValidateSortsWithoutTouchingTheCallersSlice(t *testing.T) {
 
 func TestFundingAccount(t *testing.T) {
 	for _, c := range []money.Currency{money.GBP(), money.EUR(), money.USD(), money.JPY()} {
-		if _, ok := FundingAccount(c); !ok {
+		if _, ok := funding.Account(c); !ok {
 			t.Errorf("no funding account for %s", c)
 		}
 	}
-	if _, ok := FundingAccount(money.Currency{}); ok {
+	if _, ok := funding.Account(money.Currency{}); ok {
 		t.Error("the zero currency has a funding account")
 	}
 }

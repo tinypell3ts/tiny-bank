@@ -56,21 +56,6 @@ const (
 	KindFunding Kind = "funding"
 )
 
-// FundingAccount returns the ID of the funding account for c. The ledger's
-// migrations create one for each supported currency. Each ID ends in the
-// currency's ISO 4217 number (826 for GBP), so it's easy to spot in logs.
-func FundingAccount(c money.Currency) (uuid.UUID, bool) {
-	id, ok := fundingAccounts[c.Code()]
-	return id, ok
-}
-
-var fundingAccounts = map[string]uuid.UUID{
-	"GBP": uuid.MustParse("00000000-0000-4000-8000-000000000826"),
-	"EUR": uuid.MustParse("00000000-0000-4000-8000-000000000978"),
-	"USD": uuid.MustParse("00000000-0000-4000-8000-000000000840"),
-	"JPY": uuid.MustParse("00000000-0000-4000-8000-000000000392"),
-}
-
 const (
 	// maxEntries bounds how many accounts one journal locks. A transfer needs
 	// two; a few more covers fees.

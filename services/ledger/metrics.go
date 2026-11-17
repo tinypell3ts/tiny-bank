@@ -7,6 +7,7 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -55,7 +56,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 	// sample to compare with, so rate() and increase() show 0 until the
 	// second journal. Refusal reasons can't all be listed here, so those
 	// series still start on first use.
-	for currency := range fundingAccounts { // one funding account per supported currency
+	for currency := range funding.All() { // one funding account per supported currency
 		m.moved.WithLabelValues(currency)
 		for _, outcome := range []string{outcomePosted, outcomeRetried, outcomeFailed} {
 			m.journals.WithLabelValues(currency, outcome, "")

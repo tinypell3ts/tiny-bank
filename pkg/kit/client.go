@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/monzo/terrors"
@@ -120,11 +121,18 @@ func Post(ctx context.Context, url string, body, m proto.Message) error {
 }
 
 func call(ctx context.Context, method, url string, body, m proto.Message) error {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	// Share the caller's deadline: give up a little before it, and tell the
+	// other service how long it has, so it stops in time to answer too.
+	budget, ok := callBudget(ctx)
+	if !ok {
+		return fmt.Errorf("%s %s: %w", method, url, terrors.Timeout("deadline", "no time left before the caller's deadline", nil))
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
 	req := typhon.NewRequest(ctx, method, url, nil)
 	req.Header.Set("Accept", protobufType)
+	req.Header.Set(DeadlineHeader, strconv.FormatInt(max(budget.Milliseconds(), 1), 10))
 	if body != nil {
 		req.EncodeAsProtobuf(body) // sets Content-Type: application/protobuf
 	}

@@ -32,7 +32,12 @@ func Serve(ctx context.Context, ln net.Listener, h http.Handler, ready *atomic.B
 	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second, // guards against slow-header (Slowloris) clients
-		BaseContext:       func(net.Listener) context.Context { return base },
+		// Closes a keep-alive connection after a minute with nothing on it:
+		// before kit.Get and kit.Post's pool does (90s), so a pooled connection
+		// is closed while idle on both sides, rather than reset by this end just
+		// as a call starts on it.
+		IdleTimeout: 60 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return base },
 	}
 
 	// The listener is already bound, so we can accept traffic as soon as Serve starts.

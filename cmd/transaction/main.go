@@ -21,8 +21,15 @@ var run = db.Run("transaction", transaction.Migrations(), routes)
 
 func main() { kit.Main("transaction", run) }
 
-// routes is the transaction API, on the service's database.
+// routes is the transaction API, on the service's database. LEDGER_URL,
+// required, is where the ledger is (http://ledger on the cluster, set in
+// deploy/values/transaction.yaml): every transfer is posted to it.
 func routes(router *typhon.Router, deps db.Deps) error {
-	transaction.RegisterRoutes(router, transaction.NewStore(deps.Pool))
+	ledgerURL, err := kit.ServiceURL(deps.Getenv, "LEDGER_URL")
+	if err != nil {
+		return err
+	}
+	service := transaction.NewService(transaction.NewStore(deps.Pool), transaction.LedgerService{BaseURL: ledgerURL})
+	transaction.RegisterRoutes(router, service)
 	return nil
 }

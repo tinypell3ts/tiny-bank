@@ -65,7 +65,7 @@ func completed(t Transfer) Transfer {
 	return t
 }
 
-func refused(t Transfer) Transfer {
+func failedForFunds(t Transfer) Transfer {
 	t.State, t.FailureReason = StateFailed, "precondition_failed.insufficient_funds"
 	return t
 }
@@ -153,7 +153,7 @@ func TestAFinishedTransferIsCreatedThenRepeated(t *testing.T) {
 // TestARefusalIsAFailedTransferNotAnError: once saved, the answer is the
 // transfer, so the first answer and every retry have the same shape.
 func TestARefusalIsAFailedTransferNotAnError(t *testing.T) {
-	transfers := newFake(refused)
+	transfers := newFake(failedForFunds)
 	rec := serve(t, transfers, http.MethodPost, "/transfers", transferJSON)
 	got := decodeTransfer(t, rec)
 	if rec.Code != http.StatusCreated || got.State != "TRANSFER_STATE_FAILED" || got.FailureReason != "precondition_failed.insufficient_funds" {

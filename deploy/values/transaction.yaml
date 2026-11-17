@@ -6,3 +6,7 @@ image:
 # passes DATABASE_URL to the service from the secret the operator generates.
 database:
   enabled: true
+config:
+  # Where the ledger is: its Service's name, on port 80. Every transfer is
+  # posted to it.
+  LEDGER_URL: http://ledger

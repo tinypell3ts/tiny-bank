@@ -15,6 +15,7 @@ import (
 	"github.com/monzo/terrors"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -65,7 +66,7 @@ func checkInvariants(t *testing.T, s *Store) {
 
 func gbpFunding(t *testing.T) uuid.UUID {
 	t.Helper()
-	id, ok := FundingAccount(money.GBP())
+	id, ok := funding.Account(money.GBP())
 	if !ok {
 		t.Fatal("no GBP funding account")
 	}
@@ -115,7 +116,7 @@ func wantCode(t *testing.T, err error, code string) {
 func TestFundingAccountsAreSeeded(t *testing.T) {
 	s := newTestStore(t)
 	for _, c := range []money.Currency{money.GBP(), money.EUR(), money.USD(), money.JPY()} {
-		id, _ := FundingAccount(c)
+		id, _ := funding.Account(c)
 		b, err := s.Balance(t.Context(), id)
 		if err != nil {
 			t.Fatalf("%s funding account: %v", c, err)
@@ -142,11 +143,11 @@ func TestFundingAccountsAreSeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(fundingAccounts) {
-		t.Errorf("migrations create %d funding accounts, Go knows %d", len(got), len(fundingAccounts))
+	if len(got) != len(funding.All()) {
+		t.Errorf("migrations create %d funding accounts, Go knows %d", len(got), len(funding.All()))
 	}
 	for _, f := range got {
-		if want, ok := fundingAccounts[f.currency]; !ok || want != f.id {
+		if want, ok := funding.All()[f.currency]; !ok || want != f.id {
 			t.Errorf("funding account %s (%s) isn't the one FundingAccount returns for %s", f.id, f.currency, f.currency)
 		}
 	}
@@ -199,7 +200,7 @@ func TestPostRefusesAnOverdraft(t *testing.T) {
 func TestPostRefusesAnotherCurrency(t *testing.T) {
 	s := newTestStore(t)
 	fund(t, s, alice, 100) // alice's account now holds GBP
-	eurFunding, _ := FundingAccount(money.EUR())
+	eurFunding, _ := funding.Account(money.EUR())
 
 	_, _, err := postJournal(s, t.Context(), NewJournal{IdempotencyKey: "e1", Entries: []Entry{
 		{eurFunding, money.New(-100, money.EUR())}, {alice, money.New(100, money.EUR())},
