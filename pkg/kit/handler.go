@@ -22,7 +22,10 @@ import (
 // runs. Every request goes through the same filters, outermost first:
 //
 //   - request ID: reuse the caller's X-Request-Id or make one, and echo it back
-//   - access log: one JSON line per request
+//   - tracing: a server span per request, continuing the caller's trace (see
+//     tracingFilter)
+//   - deadline: the caller's X-Request-Timeout on the request's context
+//   - access log: one JSON line per request, with the request and trace IDs
 //   - metrics: RED metrics labelled by route pattern (pkg/obs)
 //   - Typhon's ErrorFilter: turns a returned error into a response with the
 //     right status, sending the terror's code and message to the caller
@@ -55,6 +58,7 @@ func Handler(logger *slog.Logger, reg *prometheus.Registry, router *typhon.Route
 		Filter(metricsFilter(metrics, router)).
 		Filter(accessLogFilter(logger)).
 		Filter(deadlineFilter).
+		Filter(tracingFilter(router)).
 		Filter(requestIDFilter)
 
 	mux := http.NewServeMux()
@@ -94,6 +98,7 @@ func accessLogFilter(logger *slog.Logger) typhon.Filter {
 		rsp := next(req)
 		logger.LogAttrs(req.Context, slog.LevelInfo, "http request",
 			slog.String("request_id", RequestIDFrom(req.Context)),
+			slog.String("trace_id", traceIDFrom(req.Context)),
 			slog.String("method", req.Method),
 			slog.String("path", req.URL.Path),
 			slog.Int("status", statusOf(rsp)),
@@ -104,23 +109,13 @@ func accessLogFilter(logger *slog.Logger) typhon.Filter {
 }
 
 // metricsFilter records RED metrics. The route label is the pattern the
-// router matched ("/accounts/:id"), or "" (recorded as "unmatched") when none
-// did. The router records it on the request it hands the handler, and the
-// response carries that request back out. A response built from the
-// unrouted request, like the 500 from recoverFilter after a panic, doesn't
-// carry it, so only then does it ask the router to match the path again.
+// router matched ("/accounts/:id"), from routeOf, or "unmatched" when none
+// did.
 func metricsFilter(m *obs.HTTPMetrics, router *typhon.Router) typhon.Filter {
 	return func(req typhon.Request, next typhon.Service) typhon.Response {
 		done := m.Track()
 		rsp := next(req)
-		route := ""
-		if rsp.Request != nil {
-			route, _ = typhon.RequestPatternFromContext(rsp.Request.Context)
-		}
-		if route == "" {
-			route = router.Pattern(req)
-		}
-		done(req.Method, route, statusOf(rsp))
+		done(req.Method, routeOf(req, rsp, router), statusOf(rsp))
 		return rsp
 	}
 }
