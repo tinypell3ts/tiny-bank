@@ -17,6 +17,8 @@ The target runtime is **Docker on Kubernetes**: a local kind cluster, services d
   - start a branch from an up-to-date `main`: `git switch main && git pull --ff-only && git switch -c <type>/<description>`. Before creating one, check it doesn't already exist, and if it does, look at what's on it rather than replacing it;
   - stage and commit its own work: `git add -A -- <paths>` (`-A --` stages deletions too), one Conventional Commit per concern.
 
+  Only the agent's own changes go in. Before starting, it runs `git status`: if the human has uncommitted or staged changes, it leaves them alone, and if it needs to change one of those files, it asks first, as `git add` would take the human's edits with its own. Before each commit, it checks `git diff --cached` holds exactly the changes it means to commit, and nothing someone else staged.
+
   The human pushes, merges, marks PRs ready and tags. An agent never pushes or force-pushes, rebases, amends or resets a commit that's been pushed, merges or deletes branches, or tags. It never commits a file it didn't write or change, never commits with `--no-verify`, and never commits on `main`. Agents open or edit a PR only when the human asks (see [Pull requests](#pull-requests)).
 - After each step: run `make check`, commit it, explain the concepts and why, give a verify command and the branch to push, then **stop for questions**.
 - **A PR is not done without tests and docs.** New code gets tests. Changed behaviour gets updated docs (README, `docs/`, ADRs, and `AGENTS.md` if layout or commands change).
