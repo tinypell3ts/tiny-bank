@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -289,5 +291,39 @@ func TestSetupGivesUpOnAServiceThatNeverAnswers(t *testing.T) {
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("setup took %v to give up, want about the %v request timeout", took, requestTimeout)
+	}
+}
+
+// TestClientReusesConnections: the tool's own client must reuse a pool, or
+// at high rates it runs the machine out of local ports and measures that.
+func TestClientReusesConnections(t *testing.T) {
+	var dialled atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(5 * time.Millisecond)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			dialled.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	const maxInFlight = 50
+	client := newClient(maxInFlight)
+	for range 5 {
+		var wg sync.WaitGroup
+		for range maxInFlight {
+			wg.Go(func() {
+				if _, _, err := postJSON(t.Context(), client, srv.URL, journal{}); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+	if n := dialled.Load(); n > maxInFlight+1 {
+		t.Errorf("%d requests opened %d connections; want at most %d, reused", 5*maxInFlight, n, maxInFlight+1)
 	}
 }

@@ -86,10 +86,24 @@ func main() {
 	// Ctrl-C stops early and still prints the summary.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, cfg, http.DefaultClient, os.Stdout); err != nil {
+	if err := run(ctx, cfg, newClient(cfg.maxInFlight), os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "journalload:", err)
 		os.Exit(1)
 	}
+}
+
+// newClient returns an HTTP client with a pool of connections as big as the
+// requests allowed at once, all kept open for reuse. Go's default client
+// keeps only 2 idle per host, so at hundreds of requests in flight it dials
+// and closes thousands of connections, until the machine runs out of local
+// ports ("resource temporarily unavailable") and the tool measures that
+// instead of the ledger.
+func newClient(maxInFlight int) *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		MaxConnsPerHost:     maxInFlight + 1, // one more for setup's account service calls
+		MaxIdleConnsPerHost: maxInFlight + 1,
+		IdleConnTimeout:     90 * time.Second,
+	}}
 }
 
 func (c config) validate() error {

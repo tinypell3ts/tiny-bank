@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -138,5 +141,42 @@ func TestGetRefusesATooLargeResponse(t *testing.T) {
 	var terr *terrors.Error
 	if !errors.As(err, &terr) || terr.Code != "bad_response.too_large" {
 		t.Fatalf("err = %v, want bad_response.too_large", err)
+	}
+}
+
+// TestGetReusesAPoolOfConnections: bursts of calls reuse a fixed pool of
+// connections instead of dialling one each. Typhon's default transport keeps
+// only 10 idle and opens as many as asked for, so bursts like these dialled
+// hundreds and, under real load, used up the pod's local ports.
+func TestGetReusesAPoolOfConnections(t *testing.T) {
+	router := typhon.Router{}
+	router.GET("/thing", func(req typhon.Request) typhon.Response {
+		time.Sleep(5 * time.Millisecond) // long enough for calls to overlap
+		return Respond(req, &typepb.Type{Name: "x"}, http.StatusOK)
+	})
+	var dialled atomic.Int64
+	srv := httptest.NewUnstartedServer(Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, readyNow(), nil))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			dialled.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	const bursts, perBurst = 5, 300
+	for range bursts {
+		var wg sync.WaitGroup
+		errs := make([]error, perBurst)
+		for i := range perBurst {
+			wg.Go(func() { errs[i] = Get(t.Context(), srv.URL+"/thing", &apipb.Mixin{}) })
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			t.Fatalf("calls failed: %v", err)
+		}
+	}
+	if n := dialled.Load(); n > maxConnsPerHost {
+		t.Errorf("%d calls opened %d connections; want at most %d, reused across bursts", bursts*perBurst, n, maxConnsPerHost)
 	}
 }

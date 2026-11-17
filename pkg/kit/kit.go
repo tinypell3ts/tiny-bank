@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 )
 
@@ -26,9 +27,16 @@ import (
 // SIGTERM is what Kubernetes sends when it wants a pod to stop. It cancels
 // the context, which tells Serve to shut down gracefully.
 //
+// It first gives Go's garbage collector a memory limit just under the
+// container's (see memoryLimitFor), so the service slows down as it nears
+// its limit instead of being killed.
+//
 // run takes its dependencies (environment and log output) as arguments, so
 // tests can call it directly with a fake environment.
 func Main(name string, run func(ctx context.Context, getenv func(string) string, out io.Writer) error) {
+	if limit, ok := memoryLimitFor(os.Getenv); ok {
+		debug.SetMemoryLimit(limit)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := run(ctx, os.Getenv, os.Stdout)
 	stop()
