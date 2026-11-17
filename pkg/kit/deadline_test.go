@@ -52,8 +52,10 @@ func TestHandlerAppliesTheCallersDeadline(t *testing.T) {
 	if got := ms(deadlineSeen(t, "2000")); got < 1900 || got > 2000 {
 		t.Errorf("X-Request-Timeout: 2000 gave the handler %dms, want about 2000", got)
 	}
-	if got := ms(deadlineSeen(t, "999999")); got > maxRequestTimeout.Milliseconds() {
-		t.Errorf("a huge deadline gave %dms, want it capped at %s", got, maxRequestTimeout)
+	for _, huge := range []string{"999999", "9223372036854775807"} { // the second overflows if converted before capping
+		if got := ms(deadlineSeen(t, huge)); got < maxRequestTimeout.Milliseconds()-100 || got > maxRequestTimeout.Milliseconds() {
+			t.Errorf("X-Request-Timeout: %s gave %dms, want it capped at %s", huge, got, maxRequestTimeout)
+		}
 	}
 	for _, ignored := range []string{"", "soon", "-5", "0"} {
 		if got := deadlineSeen(t, ignored); got != "none" {

@@ -32,7 +32,10 @@ func deadlineFilter(req typhon.Request, next typhon.Service) typhon.Response {
 	if err != nil || ms <= 0 {
 		return next(req)
 	}
-	ctx, cancel := context.WithTimeout(req.Context, min(time.Duration(ms)*time.Millisecond, maxRequestTimeout))
+	// Cap the milliseconds before turning them into a Duration: a huge value
+	// times time.Millisecond would wrap round to a negative duration, which
+	// would end the request at once.
+	ctx, cancel := context.WithTimeout(req.Context, time.Duration(min(ms, maxRequestTimeout.Milliseconds()))*time.Millisecond)
 	defer cancel()
 	req.Context = ctx
 	return next(req)
