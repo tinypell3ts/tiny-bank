@@ -33,7 +33,7 @@ func routes(router *typhon.Router, deps db.Deps) error {
 	if err != nil {
 		return err
 	}
-	service := transaction.NewService(transaction.NewStore(deps.Pool), transaction.LedgerService{BaseURL: ledgerURL})
+	service := transaction.NewService(transaction.NewStore(deps.Pool), transaction.LedgerService{BaseURL: ledgerURL}, deps.Metrics)
 	transaction.RegisterRoutes(router, service)
 	deps.Background(func(ctx context.Context) { service.RunFinisher(ctx, deps.Logger) })
 	return nil

@@ -116,6 +116,22 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([
 	return due, nil
 }
 
+// Pending returns how many transfers are pending and when the oldest of them
+// was created (zero if none is).
+func (s *Store) Pending(ctx context.Context) (int, time.Time, error) {
+	var (
+		count  int
+		oldest *time.Time
+	)
+	if err := s.pool.QueryRow(ctx, `SELECT count(*), min(created_at) FROM transfers WHERE state = 'pending'`).Scan(&count, &oldest); err != nil {
+		return 0, time.Time{}, fmt.Errorf("count pending transfers: %w", err)
+	}
+	if oldest == nil {
+		return count, time.Time{}, nil
+	}
+	return count, *oldest, nil
+}
+
 // Complete marks pending transfer id completed, posted by the ledger as
 // journal journalID. Completing it again with the same journal is fine (an
 // answer that arrived twice); anything else on a finished transfer is an

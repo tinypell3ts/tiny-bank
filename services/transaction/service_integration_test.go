@@ -13,6 +13,8 @@ import (
 	"uuid"
 
 	"github.com/monzo/terrors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // fakeLedger answers posts from a script: each call takes the next answer,
@@ -45,7 +47,7 @@ func (f *fakeLedger) calls() int {
 func newTestService(t *testing.T, answers ...error) (*Service, *fakeLedger) {
 	t.Helper()
 	ledger := &fakeLedger{answers: answers, journal: uuid.New()}
-	return NewService(newTestStore(t), ledger), ledger
+	return NewService(newTestStore(t), ledger, prometheus.NewRegistry()), ledger
 }
 
 var (
@@ -282,5 +284,27 @@ func TestRunFinisherFinishesThenStopsAtShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("RunFinisher didn't stop at shutdown")
+	}
+}
+
+// TestTheMetricsSayWhoTriedAndWhatsStuck: a request's posts and the
+// finisher's are told apart, and the finisher reports what's still pending.
+func TestTheMetricsSayWhoTriedAndWhatsStuck(t *testing.T) {
+	s, _ := newTestService(t, errUnreachable, errUnreachable, errUnreachable, errLedgerDown)
+	leftPending(t, s, "t1")
+	if _, err := s.FinishDue(t.Context(), discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(s.metrics.posts.WithLabelValues(byRequest, "unsure", "")); got != attemptsPerRequest {
+		t.Errorf("request posts = %v, want %d", got, attemptsPerRequest)
+	}
+	if got := testutil.ToFloat64(s.metrics.posts.WithLabelValues(byFinisher, "unsure", "")); got != 1 {
+		t.Errorf("finisher posts = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(s.metrics.pending); got != 1 {
+		t.Errorf("pending = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(s.metrics.oldestPending); got <= 0 {
+		t.Errorf("oldest pending = %vs, want its age", got)
 	}
 }

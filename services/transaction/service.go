@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monzo/terrors"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -38,13 +39,14 @@ const (
 // Get, and its own Create.
 type Service struct {
 	*Store
-	ledger Ledger
+	ledger  Ledger
+	metrics *metrics
 }
 
-// NewService returns the transaction service, saving transfers in store and
-// posting them to ledger.
-func NewService(store *Store, ledger Ledger) *Service {
-	return &Service{Store: store, ledger: ledger}
+// NewService returns the transaction service, saving transfers in store,
+// posting them to ledger, and registering its business metrics on reg.
+func NewService(store *Store, ledger Ledger, reg prometheus.Registerer) *Service {
+	return &Service{Store: store, ledger: ledger, metrics: newMetrics(reg)}
 }
 
 // Create saves req as a transfer (or finds the one already saved with its
@@ -57,7 +59,7 @@ func (s *Service) Create(ctx context.Context, req NewTransfer) (Transfer, bool, 
 	if err != nil || t.State != StatePending {
 		return t, created, err
 	}
-	t, err = s.attempt(ctx, t, attemptsPerRequest)
+	t, err = s.attempt(ctx, t, byRequest, attemptsPerRequest)
 	return t, created, err
 }
 
@@ -85,8 +87,14 @@ func (s *Service) RunFinisher(ctx context.Context, logger *slog.Logger) {
 // until none are due or ctx ends, and returns how many it tried. A transfer
 // the ledger still doesn't answer stays pending, due again later
 // (nextAttemptAfter). One transfer's error is logged and doesn't stop the
-// others.
+// others. It starts by updating the pending metrics.
 func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, error) {
+	count, oldest, err := s.Pending(ctx)
+	if err != nil {
+		return 0, err
+	}
+	s.metrics.setPending(count, oldest)
+
 	tried := 0
 	for ctx.Err() == nil {
 		due, err := s.ClaimDue(ctx, finisherBatch, claimLease)
@@ -94,7 +102,7 @@ func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, erro
 			return tried, err
 		}
 		for _, t := range due {
-			if _, err := s.attempt(ctx, t, 1); err != nil {
+			if _, err := s.attempt(ctx, t, byFinisher, 1); err != nil {
 				logger.Error("finish transfer", "transfer_id", t.ID, "error", err)
 			}
 		}
@@ -107,18 +115,20 @@ func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, erro
 }
 
 // attempt posts pending transfer t to the ledger, up to tries times, and
-// records the outcome. Before each try it records the attempt and
+// records the outcome, counting each post as made by by. Before each try it records the attempt and
 // when to try again (nextAttemptAfter), so if this service dies mid-call the
 // transfer is still found and finished later. Every try uses the transfer's
 // own ID as the ledger's idempotency key, so the money moves at most once.
-func (s *Service) attempt(ctx context.Context, t Transfer, tries int) (Transfer, error) {
+func (s *Service) attempt(ctx context.Context, t Transfer, by string, tries int) (Transfer, error) {
 	for try := range tries {
 		var err error
 		if t, err = s.StartAttempt(ctx, t.ID, nextAttemptAfter(t.Attempts+1)); err != nil {
 			return t, fmt.Errorf("start attempt: %w", err)
 		}
 		journalID, postErr := s.ledger.Post(ctx, t)
-		switch result, reason := outcomeOf(postErr); result {
+		result, reason := outcomeOf(postErr)
+		s.metrics.posted(by, result, reason)
+		switch result {
 		case posted:
 			return s.record(ctx, func(ctx context.Context) (Transfer, error) { return s.Complete(ctx, t.ID, journalID) })
 		case refusedForGood:

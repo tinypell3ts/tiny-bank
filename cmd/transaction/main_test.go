@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/monzo/typhon"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
@@ -16,7 +17,7 @@ import (
 func TestConformance(t *testing.T) {
 	env := map[string]string{"LEDGER_URL": "http://ledger"}
 	kittest.ConformanceOf(t, func(r *typhon.Router) {
-		deps := db.Deps{Getenv: func(k string) string { return env[k] }, Background: func(func(context.Context)) {}}
+		deps := db.Deps{Getenv: func(k string) string { return env[k] }, Metrics: prometheus.NewRegistry(), Background: func(func(context.Context)) {}}
 		if err := routes(r, deps); err != nil {
 			t.Fatal(err)
 		}
@@ -29,6 +30,7 @@ func TestRoutesStartTheFinisher(t *testing.T) {
 	started := 0
 	deps := db.Deps{
 		Getenv:     func(string) string { return "http://ledger" },
+		Metrics:    prometheus.NewRegistry(),
 		Background: func(func(context.Context)) { started++ },
 	}
 	if err := routes(&typhon.Router{}, deps); err != nil || started != 1 {
