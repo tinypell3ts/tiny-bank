@@ -11,6 +11,7 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
@@ -21,7 +22,9 @@ import (
 func kitService() http.Handler {
 	var ready atomic.Bool
 	ready.Store(true)
-	return kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &typhon.Router{}, &ready, nil)
+	router := typhon.Router{}
+	addTracedRoute(&router)
+	return kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, &ready, nil)
 }
 
 func TestAServiceOnKitConforms(t *testing.T) {
@@ -54,13 +57,12 @@ func TestEachCheckCatchesItsRuleBeingBroken(t *testing.T) {
 		}()),
 		// metrics labelled by raw path
 		"metrics": rawPathMetrics(kitService()),
-		// tracing added by hand: a span named by raw path, ignoring the
-		// caller's traceparent, so every hop starts a trace of its own
-		// (probes still go to kit.Handler, so the check gets past that rule)
-		"tracing": overrideRoute(kitService(), unroutedPath, func(w http.ResponseWriter, r *http.Request) {
-			_, span := otel.Tracer("by-hand").Start(r.Context(), r.URL.Path)
+		// tracing done by hand for one matched route, naming its span by the
+		// raw path: probes and unmatched paths still go to kit.Handler, so
+		// only the rule that a matched route is named by its pattern breaks
+		"tracing": overrideRoute(kitService(), tracedPath, func(w http.ResponseWriter, r *http.Request) {
+			_, span := otel.Tracer("by-hand").Start(r.Context(), r.Method+" "+r.URL.Path, trace.WithSpanKind(trace.SpanKindServer))
 			span.End()
-			http.NotFound(w, r)
 		}),
 	}
 	for _, c := range checks {
