@@ -12,11 +12,13 @@ pkg/kit/
 ├── config.go     # Config and LoadConfig: PORT, LOG_LEVEL, SHUTDOWN_TIMEOUT
 ├── secret.go     # Secret: prints as xxxxx everywhere; Reveal() is the only way in
 ├── serve.go      # Serve: http.Server with graceful shutdown, cancelling requests left at the deadline
-├── handler.go    # Handler: the filter chain, /metrics, the body cap; Health
+├── handler.go    # Handler: the filter chain, /metrics, the body cap, and the probes (/healthz, /readyz)
+├── ready.go      # readyz: readiness, with an optional dependency check under a 2s timeout
 ├── decode.go     # Decode: a JSON body into a proto message, strictly, every failure a coded 400
 ├── respond.go    # Respond, RespondCreated: a proto message as JSON with the proto field names
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
-└── kittest/      # Conformance: the checks every service's handler must pass
+├── uuid.go       # ParseUUID: caller text to a UUID, canonical form only, so one thing has one URL
+└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start and Get run a real service in integration tests
 ```
 
 ## The filter chain

@@ -78,7 +78,7 @@ func (h handler) create(req typhon.Request) typhon.Response {
 
 	// Turn untrusted text into typed values here, at the edge, so everything
 	// after this point gets a well-formed UUID and a supported currency.
-	customerID, ok := parseID(body.GetCustomerId())
+	customerID, ok := kit.ParseUUID(body.GetCustomerId())
 	if !ok {
 		return typhon.Response{Error: invalid("customer_id",
 			"customer_id must be a lower-case UUID with dashes, like c0ffee00-0000-4000-8000-000000000001")}
@@ -96,7 +96,7 @@ func (h handler) create(req typhon.Request) typhon.Response {
 }
 
 func (h handler) get(req typhon.Request) typhon.Response {
-	id, ok := parseID(typhon.RouterForRequest(req).Params(req)["id"])
+	id, ok := kit.ParseUUID(typhon.RouterForRequest(req).Params(req)["id"])
 	if !ok {
 		// No account has an ID that isn't a canonical UUID, so this is the same
 		// "not found" as a missing account, not a bad request.
@@ -107,13 +107,4 @@ func (h handler) get(req typhon.Request) typhon.Response {
 		return typhon.Response{Error: err}
 	}
 	return kit.Respond(req, toProto(acc), http.StatusOK)
-}
-
-// parseID accepts only the canonical form of a UUID, lower-case with dashes,
-// as the API returns it. uuid.Parse also accepts braces, a urn:uuid: prefix,
-// no dashes and upper case; allowing those would let one account be reached
-// under many URLs, which anything keyed on the path could be fooled by.
-func parseID(raw string) (uuid.UUID, bool) {
-	id, err := uuid.Parse(raw)
-	return id, err == nil && id.String() == raw
 }

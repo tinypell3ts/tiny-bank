@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
@@ -63,7 +64,7 @@ func apiHandler(accounts Accounts) (http.Handler, *bytes.Buffer) {
 	var logs bytes.Buffer
 	router := typhon.Router{}
 	RegisterRoutes(&router, accounts)
-	return kit.Handler(slog.New(slog.NewJSONHandler(&logs, nil)), obs.NewRegistry(), &router), &logs
+	return kit.Handler(slog.New(slog.NewJSONHandler(&logs, nil)), obs.NewRegistry(), &router, new(atomic.Bool), nil), &logs
 }
 
 // serve sends one request (JSON for POSTs) and returns the response and logs.

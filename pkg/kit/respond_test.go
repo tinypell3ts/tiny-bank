@@ -19,7 +19,7 @@ func respond(t *testing.T, h typhon.Service) *httptest.ResponseRecorder {
 	t.Helper()
 	router := typhon.Router{}
 	router.GET("/thing", h)
-	handler := Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router)
+	handler := Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, readyNow(), nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/thing", nil))
 	return rec

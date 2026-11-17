@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/monzo/terrors"
@@ -14,13 +15,12 @@ import (
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
-// kitService is the smallest service built the way services are: health
-// routes on a Typhon router, behind kit.Handler.
+// kitService is the smallest service built the way services are: a Typhon
+// router behind kit.Handler, which adds the probes.
 func kitService() http.Handler {
-	router := typhon.Router{}
-	router.GET("/healthz", kit.Health)
-	router.GET("/readyz", kit.Health)
-	return kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router)
+	var ready atomic.Bool
+	ready.Store(true)
+	return kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &typhon.Router{}, &ready, nil)
 }
 
 func TestAServiceOnKitConforms(t *testing.T) {

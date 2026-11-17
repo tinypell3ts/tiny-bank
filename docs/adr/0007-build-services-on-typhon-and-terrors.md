@@ -43,3 +43,7 @@ The plan was to build our own Typhon-style `Service`/`Filter` types and our own 
 ## Update, Phase 6 (2026-11-17)
 
 Phase 6 brought in the protobuf contracts, but services still exchange them as JSON, with the proto field names (`customer_id`), through `kit.Decode` and `kit.Respond`. Binary protobuf bodies and Typhon clients move to Phase 7, with the first service-to-service call, because until then nothing would use them. The decision itself, Typhon and terrors with protobuf contracts, is unchanged.
+
+## Update, Phase 7 (2026-11-17)
+
+With a second database service (the ledger), the wiring each service wrote for itself was the same every time, so it moved into shared code. `kit.Handler` now adds `/healthz` and `/readyz` to every service's router, so a service can't forget them, and readiness takes the service's one dependency check (its database's `Ping`). `db.Run` is the whole startup of a service with a database: config, logs, connect and migrate, routes, serve. A service's `cmd/` package is now only its migrations and routes. The decision itself is unchanged.
