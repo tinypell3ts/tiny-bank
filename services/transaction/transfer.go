@@ -64,9 +64,12 @@ type Transfer struct {
 	NextAttemptAt  time.Time // when a pending transfer is next due to be tried
 	// Lease is who is attempting it now (Store.Claim). Only the holder may
 	// post it to the ledger. Internal: never in the API.
-	Lease     uuid.UUID
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Lease uuid.UUID
+	// TraceID and RequestID are those of the request that created it, or ""
+	// (see NewTransfer). Internal: never in the API.
+	TraceID, RequestID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // NewTransfer is a request to move money.
@@ -76,6 +79,11 @@ type NewTransfer struct {
 	From           uuid.UUID // leave as uuid.Nil() for a deposit
 	To             uuid.UUID
 	Amount         money.Money
+	// TraceID and RequestID identify the request asking for it (kit.TraceIDFrom,
+	// kit.RequestIDFrom), saved with the transfer so it leads to its trace and
+	// logs. Empty if unknown. They're not part of what's asked for: a retry
+	// from another request is still the same transfer (see same).
+	TraceID, RequestID string
 }
 
 func invalid(field, message string) error { return terrors.BadRequest(field, message, nil) }
