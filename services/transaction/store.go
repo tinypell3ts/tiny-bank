@@ -97,28 +97,34 @@ func (s *Store) StartAttempt(ctx context.Context, id uuid.UUID, retryAfter time.
 // answer that arrived twice); anything else on a finished transfer is an
 // error, since a finished transfer never changes.
 func (s *Store) Complete(ctx context.Context, id, journalID uuid.UUID) (Transfer, error) {
-	t, err := s.change(ctx, id, "complete",
+	return s.finish(ctx, id, "complete",
 		`UPDATE transfers SET state = 'completed', journal_id = $2, updated_at = now()
 		 WHERE id = $1 AND state = 'pending' RETURNING `+columns,
+		func(t Transfer) bool { return t.State == StateCompleted && t.JournalID == journalID },
 		id, journalID)
-	var finished *finishedError
-	if errors.As(err, &finished) && finished.t.State == StateCompleted && finished.t.JournalID == journalID {
-		return finished.t, nil // the same answer again
-	}
-	return t, err
 }
 
 // Fail marks pending transfer id failed, refused by the ledger for reason
 // (its terror code). Failing it again for the same reason is fine; anything
 // else on a finished transfer is an error.
 func (s *Store) Fail(ctx context.Context, id uuid.UUID, reason string) (Transfer, error) {
-	t, err := s.change(ctx, id, "fail",
+	return s.finish(ctx, id, "fail",
 		`UPDATE transfers SET state = 'failed', failure_reason = $2, updated_at = now()
 		 WHERE id = $1 AND state = 'pending' RETURNING `+columns,
+		func(t Transfer) bool { return t.State == StateFailed && t.FailureReason == reason },
 		id, reason)
+}
+
+// finish moves a pending transfer to a final state with sql. If it's already
+// finished and sameAnswer says it was finished this same way, that's the same
+// answer arriving twice, so it's returned as if this call had done it.
+// Finished any other way, it's a *finishedError: a bug, since a finished
+// transfer never changes.
+func (s *Store) finish(ctx context.Context, id uuid.UUID, what, sql string, sameAnswer func(Transfer) bool, args ...any) (Transfer, error) {
+	t, err := s.change(ctx, id, what, sql, args...)
 	var finished *finishedError
-	if errors.As(err, &finished) && finished.t.State == StateFailed && finished.t.FailureReason == reason {
-		return finished.t, nil // the same answer again
+	if errors.As(err, &finished) && sameAnswer(finished.t) {
+		return finished.t, nil
 	}
 	return t, err
 }

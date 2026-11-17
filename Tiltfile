@@ -59,6 +59,7 @@ def go_service(name, port):
 go_service('hello', port=8080)
 go_service('account', port=8081)
 go_service('ledger', port=8082)
+go_service('transaction', port=8083)
 
 # --- Monitoring: Prometheus + Grafana (kube-prometheus-stack) ---
 # Installed with plain Helm through `make monitoring`, so it works the same with

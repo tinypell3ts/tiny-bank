@@ -1,0 +1,8 @@
+# transaction's settings for the generic chart (deploy/charts/service).
+name: transaction
+image:
+  repository: tiny-bank/transaction
+# Its own Postgres, run by CloudNativePG: the chart creates transaction-db and
+# passes DATABASE_URL to the service from the secret the operator generates.
+database:
+  enabled: true

@@ -51,11 +51,17 @@ func wantsProtobuf(req typhon.Request) bool {
 	return strings.Contains(req.Header.Get("Accept"), protobufType)
 }
 
-// RespondCreated is Respond with 201 Created and a Location header. Setting
-// the header here matters: when encoding fails, Respond's response has no
-// headers to set.
+// RespondCreated is Respond with 201 Created and a Location header.
 func RespondCreated(req typhon.Request, m proto.Message, location string) typhon.Response {
-	rsp := Respond(req, m, http.StatusCreated)
+	return RespondAt(req, m, http.StatusCreated, location)
+}
+
+// RespondAt is Respond with a Location header, saying where the resource can
+// be fetched: with 201 Created for one just made, or 202 Accepted for one
+// still being worked on. Setting the header here matters: when encoding
+// fails, Respond's response has no headers to set.
+func RespondAt(req typhon.Request, m proto.Message, code int, location string) typhon.Response {
+	rsp := Respond(req, m, code)
 	if rsp.Response != nil {
 		rsp.Header.Set("Location", location)
 	}

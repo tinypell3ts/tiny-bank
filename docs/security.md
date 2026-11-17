@@ -62,7 +62,7 @@ Each gap is known and has a plan. A change must not make one worse in the meanti
 
 | Gap | Risk today | Closed by |
 |---|---|---|
-| No sign-in: the account API trusts the customer ID a caller sends | Any pod in the cluster can open or read accounts, and read balances, for anyone | Phase 12: edge gateway, with the customer ID taken from the sign-in token |
+| No sign-in: the account API trusts the customer ID a caller sends, and the transaction API moves money for whoever asks | Any pod in the cluster can open or read accounts, read balances, and move money between any accounts, for anyone | Phase 12: edge gateway, with the customer ID taken from the sign-in token |
 | No NetworkPolicies: any pod can call any service | A compromised pod can reach every service | Phase 13: hardening |
 | No rate limits | One caller can use up a service's capacity | Phase 13: hardening |
 | No load shedding: a service accepts every request, however many are already in flight | Under overload, memory grows until the pod is killed and every caller gets timeouts, instead of the extra requests being turned away quickly (a load test at 400 requests at once killed the ledger at its old 64 MiB limit) | Phase 13: cap requests in flight per service in `kit.Handler`, answering a quick 503 above the cap |

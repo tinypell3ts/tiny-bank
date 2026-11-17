@@ -86,27 +86,35 @@ func invalid(field, message string) error { return terrors.BadRequest(field, mes
 // kind, accounts that make sense for it, and an amount from 1 minor unit to
 // maxAmount. Whether the money is there and the accounts are open is the
 // ledger's to decide.
+//
+// Each error's code is the request field it's about (bad_request.account_id
+// for a deposit, bad_request.to_account_id for a transfer), so a caller can
+// point at the field that's wrong.
 func (t NewTransfer) Validate() error {
+	fromField, toField := "from_account_id", "to_account_id"
+	if t.Kind == KindDeposit {
+		toField = "account_id" // a deposit's request names its one account account_id
+	}
 	if err := kit.CheckIdempotencyKey(t.IdempotencyKey); err != nil {
 		return err
 	}
 	switch t.Kind {
 	case KindTransfer:
 		if t.From == uuid.Nil() {
-			return invalid("from", "a transfer needs an account to take the money from")
+			return invalid(fromField, "a transfer needs an account to take the money from")
 		}
 	case KindDeposit:
 		if t.From != uuid.Nil() {
-			return invalid("from", "a deposit comes from outside the bank, so it has no from account")
+			return invalid(fromField, "a deposit comes from outside the bank, so it has no from account")
 		}
 	default:
 		return invalid("kind", "kind must be transfer or deposit")
 	}
 	if t.To == uuid.Nil() {
-		return invalid("to", "an account to put the money in is required")
+		return invalid(toField, "an account to put the money in is required")
 	}
 	if t.From == t.To {
-		return invalid("to", "a transfer can't be to the account it's from")
+		return invalid(toField, "a transfer can't be to the account it's from")
 	}
 	if t.Amount.Currency() == (money.Currency{}) {
 		return invalid("currency", "currency is required")

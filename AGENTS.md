@@ -72,6 +72,7 @@ Current:
 ├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: its migrations and routes, run by db.Run
 ├── cmd/ledger/          # ledger service binary: its migrations and routes, run by db.Run
+├── cmd/transaction/     # transaction service binary: its migrations and routes, run by db.Run
 ├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
 ├── services/ledger/     # ledger service code: double-entry journals, balances under row locks, idempotency keys, migrations/*.sql
 ├── services/transaction/ # transaction service code: transfers and deposits as a state machine (pending, then completed or failed), migrations/*.sql
@@ -129,7 +130,7 @@ make load-journals RATE=5 DURATION=1m # with make dev running: post random journ
 make dev-down                 # remove what Tilt deployed, INCLUDING every service database and its data (cluster, monitoring, CloudNativePG stay)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 8082 (ledger), 3000 (Grafana) and 9090 (Prometheus) are taken.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 8082 (ledger), 8083 (transaction), 3000 (Grafana) and 9090 (Prometheus) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
