@@ -4,12 +4,18 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"iter"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/monzo/typhon"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
@@ -45,12 +51,16 @@ func decode(t *testing.T, body string) transferBody {
 	return b
 }
 
-// TestTransactionAPIEndToEnd runs three real services, each on its own
-// Postgres: the account service, the ledger (checking accounts with it), and
-// the transaction service (posting to the ledger). It deposits money, moves
-// some, answers a retry with the same transfer, and records a refusal as a
-// failed transfer, and the ledger's balances agree.
-func TestTransactionAPIEndToEnd(t *testing.T) {
+// bank is three real services, each on its own Postgres: the account
+// service, the ledger (checking accounts with it), and the transaction
+// service (posting to the ledger).
+type bank struct {
+	base, ledgerURL, accountURL string
+	logs                        fmt.Stringer
+}
+
+func startBank(t *testing.T) bank {
+	t.Helper()
 	accountURL := startService(t, "account", func(r *typhon.Router) {
 		account.RegisterRoutes(r, account.NewStore(dbtest.Migrated(t, account.Migrations())))
 	})
@@ -59,21 +69,32 @@ func TestTransactionAPIEndToEnd(t *testing.T) {
 		ledger.RegisterRoutes(r, ledger.NewService(store, ledger.AccountService{BaseURL: accountURL}, prometheus.NewRegistry()))
 	})
 	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": dbtest.Database(t), "LEDGER_URL": ledgerURL})
+	return bank{base: base, ledgerURL: ledgerURL, accountURL: accountURL, logs: logs}
+}
+
+// open opens a GBP account with the account service and returns its ID.
+func (b bank) open(t *testing.T) string {
+	t.Helper()
+	_, _, body := post(t, b.accountURL+"/accounts", `{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada","currency":"GBP"}`)
+	var acc struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &acc); err != nil || acc.ID == "" {
+		t.Fatalf("open account: %s", body)
+	}
+	return acc.ID
+}
+
+// TestTransactionAPIEndToEnd deposits money, moves some, answers a retry with
+// the same transfer, and records a refusal as a failed transfer, and the
+// ledger's balances agree.
+func TestTransactionAPIEndToEnd(t *testing.T) {
+	b := startBank(t)
+	base, ledgerURL, logs := b.base, b.ledgerURL, b.logs
 	if !strings.Contains(logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql","00003_lease_transfers.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
-
-	open := func() string {
-		_, _, body := post(t, accountURL+"/accounts", `{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada","currency":"GBP"}`)
-		var acc struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(body), &acc); err != nil || acc.ID == "" {
-			t.Fatalf("open account: %s", body)
-		}
-		return acc.ID
-	}
-	alice, bob := open(), open()
+	alice, bob := b.open(t), b.open(t)
 
 	status, _, body := post(t, base+"/deposits", `{"idempotency_key":"d1","account_id":"`+alice+`","currency":"GBP","amount":1000}`)
 	if d := decode(t, body); status != http.StatusCreated || d.State != "TRANSFER_STATE_COMPLETED" || d.JournalID == "" {
@@ -108,4 +129,67 @@ func TestTransactionAPIEndToEnd(t *testing.T) {
 	if strings.Contains(logs.String(), dbtest.Password) {
 		t.Error("logs leak the database password")
 	}
+}
+
+// TestADepositIsOneTrace: one deposit, sent with a traceparent, is one trace
+// across all three services, each hop under the one that called it:
+// transaction → ledger → account.
+func TestADepositIsOneTrace(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	prevProvider, prevPropagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)))
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTracerProvider(prevProvider); otel.SetTextMapPropagator(prevPropagator) })
+
+	b := startBank(t)
+	alice := b.open(t)
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	header := http.Header{"Traceparent": {"00-" + traceID + "-00f067aa0ba902b7-01"}}
+	if status, _, body := kittest.Post(t, b.base+"/deposits", `{"idempotency_key":"d1","account_id":"`+alice+`","currency":"GBP","amount":1000}`, header); status != http.StatusCreated {
+		t.Fatalf("deposit = %d %s", status, body)
+	}
+
+	byName := map[string]tracetest.SpanStub{}
+	for _, s := range exporter.GetSpans() {
+		if s.SpanContext.TraceID().String() == traceID {
+			byName[s.Name] = s
+		}
+	}
+	host := func(url string) string { return strings.TrimPrefix(url, "http://") }
+	chain := []string{ // each span's parent is the one before it
+		"POST /deposits",
+		"POST " + host(b.ledgerURL),
+		"POST /journals",
+		"GET " + host(b.accountURL),
+		"GET /accounts/:id",
+	}
+	for _, name := range chain {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("no %q span in trace %s; got %v", name, traceID, names(byName))
+		}
+	}
+	for parent, child := range pairs(chain) {
+		if byName[child].Parent.SpanID() != byName[parent].SpanContext.SpanID() {
+			t.Errorf("%q isn't under %q", child, parent)
+		}
+	}
+}
+
+// pairs yields each item of s with the one after it.
+func pairs(s []string) iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		for i := 1; i < len(s); i++ {
+			if !yield(s[i-1], s[i]) {
+				return
+			}
+		}
+	}
+}
+
+func names(m map[string]tracetest.SpanStub) []string {
+	var out []string
+	for n := range m {
+		out = append(out, n)
+	}
+	return out
 }
