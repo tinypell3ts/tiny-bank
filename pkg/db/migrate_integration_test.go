@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
+	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 )
 
 var (
@@ -35,7 +36,7 @@ func openTestDB(t *testing.T, dsn string) *pgxpool.Pool {
 }
 
 func TestMigrateAppliesInOrderThenNothing(t *testing.T) {
-	pool := openTestDB(t, startPostgres(t))
+	pool := openTestDB(t, dbtest.Database(t))
 	ctx := t.Context()
 
 	applied, err := db.Migrate(ctx, pool, goodMigrations)
@@ -64,7 +65,7 @@ func TestMigrateAppliesInOrderThenNothing(t *testing.T) {
 }
 
 func TestMigrateIsSafeWhenPodsStartTogether(t *testing.T) {
-	dsn := startPostgres(t)
+	dsn := dbtest.Database(t)
 	const pods = 5
 
 	// Each "pod" has its own pool, like separate processes.
@@ -127,7 +128,7 @@ func TestMigrateIsSafeWhenPodsStartTogether(t *testing.T) {
 }
 
 func TestMigrateRollsBackAFailingMigration(t *testing.T) {
-	pool := openTestDB(t, startPostgres(t))
+	pool := openTestDB(t, dbtest.Database(t))
 	ctx := t.Context()
 
 	applied, err := db.Migrate(ctx, pool, brokenMigrations)
@@ -154,7 +155,7 @@ func TestMigrateRollsBackAFailingMigration(t *testing.T) {
 func TestMigrateNeedsAnEmptyOrMigratedDatabase(t *testing.T) {
 	// A table goose doesn't know about doesn't stop it: Migrate only tracks its
 	// own versions. This documents that migrations must create everything.
-	pool := openTestDB(t, startPostgres(t))
+	pool := openTestDB(t, dbtest.Database(t))
 	if _, err := pool.Exec(t.Context(), "CREATE TABLE unrelated (id int)"); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +167,7 @@ func TestMigrateNeedsAnEmptyOrMigratedDatabase(t *testing.T) {
 func TestMigrateOnlyReadsTheMigrationsFolder(t *testing.T) {
 	// Files at the root are ignored, so a service that embedded the wrong
 	// pattern gets an error at startup instead of an unmigrated database.
-	pool := openTestDB(t, startPostgres(t))
+	pool := openTestDB(t, dbtest.Database(t))
 	first, err := fs.ReadFile(goodMigrations, "migrations/00001_create_widgets.sql")
 	if err != nil {
 		t.Fatal(err)
