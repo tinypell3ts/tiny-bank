@@ -68,7 +68,7 @@ func TestGeneratorRetriesOnlyPostedJournals(t *testing.T) {
 	g := newGenerator([]string{"a", "b"}, 500, 1, "run") // every request is a retry once one has been posted
 	refused := g.next()
 	if again := g.next(); again.IdempotencyKey == refused.IdempotencyKey {
-		t.Fatal("resent a journal that was never posted: the ledger forgets a refused key, so this could move money")
+		t.Fatal("resent a journal that was never posted: a retry should be of one that moved money, so it answers 200")
 	}
 	posted := g.next()
 	g.posted(posted)

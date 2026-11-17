@@ -94,6 +94,42 @@ func TestServiceRefusesAccountsItCantUse(t *testing.T) {
 	}
 }
 
+// TestServiceKeepsAnAccountCheckRefusal: a request refused because an
+// account couldn't be used stays refused once the account can be, so a late
+// repeat with the same key never moves money its caller was told didn't.
+func TestServiceKeepsAnAccountCheckRefusal(t *testing.T) {
+	s, accounts := newTestService(t)
+	fund(t, s.Store, alice, 1000)
+	accounts.info[bob] = AccountInfo{Currency: money.GBP()} // not open yet
+	_, _, err := s.Post(t.Context(), transfer("t1", alice, bob, 300))
+	wantCode(t, err, "precondition_failed.account_not_open")
+
+	accounts.info[bob] = openGBP()
+	accounts.asked = nil
+	_, created, err := s.Post(t.Context(), transfer("t1", alice, bob, 300))
+	wantCode(t, err, "precondition_failed.account_not_open")
+	if created || len(accounts.asked) != 0 {
+		t.Errorf("repeat created %v after asking about %v; want the kept refusal, with no checks", created, accounts.asked)
+	}
+	wantBalance(t, s.Store, alice, gbp(1000))
+}
+
+// TestServiceDoesntKeepAnUnsureAnswer: when the account service can't be
+// reached, nothing is decided, so the same request can go through later.
+func TestServiceDoesntKeepAnUnsureAnswer(t *testing.T) {
+	s, accounts := newTestService(t)
+	fund(t, s.Store, alice, 1000)
+	accounts.err = errors.New("account service unreachable")
+	if _, _, err := s.Post(t.Context(), transfer("t1", alice, bob, 300)); err == nil {
+		t.Fatal("posted without being able to check the accounts")
+	}
+	accounts.err = nil
+	if _, created, err := s.Post(t.Context(), transfer("t1", alice, bob, 300)); err != nil || !created {
+		t.Fatalf("retry once the account service is back = %v, created %v; want it posted", err, created)
+	}
+	wantBalance(t, s.Store, alice, gbp(700))
+}
+
 func TestServiceFailsClosedWhenTheAccountServiceDoes(t *testing.T) {
 	s, accounts := newTestService(t)
 	fund(t, s.Store, alice, 1000)

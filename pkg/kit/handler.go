@@ -54,6 +54,7 @@ func Handler(logger *slog.Logger, reg *prometheus.Registry, router *typhon.Route
 		Filter(typhon.ErrorFilter).
 		Filter(metricsFilter(metrics, router)).
 		Filter(accessLogFilter(logger)).
+		Filter(deadlineFilter).
 		Filter(requestIDFilter)
 
 	mux := http.NewServeMux()
@@ -160,7 +161,14 @@ func cleanErrors(logger *slog.Logger) typhon.Filter {
 		// is waiting for this response, so it isn't a server failure. It checks
 		// the request's own context, not the error, so a context.Canceled from
 		// inside the service while the caller is still waiting stays a 500.
-		if req.Err() != nil { // typhon.Request embeds its context.Context
+		//
+		// A passed deadline is different: the caller sent it (DeadlineHeader)
+		// and is still waiting, a little longer than us, so it gets a timeout
+		// it can act on (a 504), not a 499. Hanging up is context.Canceled; a
+		// deadline is context.DeadlineExceeded.
+		if errors.Is(req.Err(), context.DeadlineExceeded) {
+			rsp.Error = terrors.Timeout("deadline", "the caller's deadline passed before this finished", nil)
+		} else if req.Err() != nil { // typhon.Request embeds its context.Context
 			logger.InfoContext(req.Context, "request cancelled before it finished",
 				"request_id", RequestIDFrom(req.Context))
 			return typhon.NewResponseWithCode(req, statusClientClosedRequest)

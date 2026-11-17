@@ -11,13 +11,13 @@ package ledger
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"time"
 	"uuid"
 
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -56,37 +56,11 @@ const (
 	KindFunding Kind = "funding"
 )
 
-// FundingAccount returns the ID of the funding account for c. The ledger's
-// migrations create one for each supported currency. Each ID ends in the
-// currency's ISO 4217 number (826 for GBP), so it's easy to spot in logs.
-func FundingAccount(c money.Currency) (uuid.UUID, bool) {
-	id, ok := fundingAccounts[c.Code()]
-	return id, ok
-}
-
-var fundingAccounts = map[string]uuid.UUID{
-	"GBP": uuid.MustParse("00000000-0000-4000-8000-000000000826"),
-	"EUR": uuid.MustParse("00000000-0000-4000-8000-000000000978"),
-	"USD": uuid.MustParse("00000000-0000-4000-8000-000000000840"),
-	"JPY": uuid.MustParse("00000000-0000-4000-8000-000000000392"),
-}
-
 const (
 	// maxEntries bounds how many accounts one journal locks. A transfer needs
 	// two; a few more covers fees.
 	maxEntries = 10
-	// maxKeyLen bounds the idempotency key. A UUID is 36 characters.
-	maxKeyLen = 100
-	// maxAmount bounds one entry: 10^12 minor units, £10 billion. Without a
-	// bound, a few huge journals could take a balance near the int64 limit,
-	// after which every post to that account would overflow. With it, a
-	// balance needs millions of maximum-size journals to get there.
-	maxAmount = 1_000_000_000_000
 )
-
-// keyPattern is what an idempotency key may contain: letters, digits and a
-// few separators, so a key is safe to log.
-var keyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
 // NewJournal is a request to move money.
 type NewJournal struct {
@@ -104,13 +78,8 @@ func invalid(field, message string) error { return terrors.BadRequest(field, mes
 // so a retry compares equal to the journal it repeats, and an account listed
 // twice is next to itself.
 func (j NewJournal) Validate() (NewJournal, error) {
-	switch n := len(j.IdempotencyKey); {
-	case n == 0:
-		return NewJournal{}, invalid("idempotency_key", "idempotency key is required")
-	case n > maxKeyLen:
-		return NewJournal{}, invalid("idempotency_key", fmt.Sprintf("idempotency key must be at most %d characters", maxKeyLen))
-	case !keyPattern.MatchString(j.IdempotencyKey):
-		return NewJournal{}, invalid("idempotency_key", "idempotency key may only contain letters, digits and . _ : -")
+	if err := kit.CheckIdempotencyKey(j.IdempotencyKey); err != nil {
+		return NewJournal{}, err
 	}
 	switch n := len(j.Entries); {
 	case n < 2:
@@ -139,8 +108,8 @@ func (j NewJournal) Validate() (NewJournal, error) {
 		}
 		if a := e.Amount.Amount(); a == 0 {
 			return NewJournal{}, invalid("entries", "an entry's amount must not be zero")
-		} else if a > maxAmount || a < -maxAmount {
-			return NewJournal{}, invalid("entries", fmt.Sprintf("an entry's amount must be at most %d minor units either way", maxAmount))
+		} else if a > money.MaxAmount || a < -money.MaxAmount {
+			return NewJournal{}, invalid("entries", fmt.Sprintf("an entry's amount must be at most %d minor units either way", money.MaxAmount))
 		}
 		var err error
 		if total, err = total.Add(e.Amount); err != nil {

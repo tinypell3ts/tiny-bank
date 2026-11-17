@@ -55,7 +55,7 @@ const (
 var requestTimeout = 10 * time.Second
 
 // gbpFunding is the ledger's GBP funding account, where money from outside
-// the bank comes from (ledger.FundingAccount).
+// the bank comes from (funding.Account in pkg/funding).
 const gbpFunding = "00000000-0000-4000-8000-000000000826"
 
 type config struct {
@@ -254,9 +254,9 @@ type generator struct {
 	runID      string
 	n          int
 	// pool holds the last retryPoolSize journals that were posted (a 201),
-	// as a ring: next overwrites the oldest. Only posted ones, because the
-	// ledger doesn't keep a refused request's key, so resending a refused
-	// one could move money, which is not what a retry does.
+	// as a ring: next overwrites the oldest. Only posted ones, so a retry
+	// always answers 200 with the first journal, and the summary's 200s count
+	// retries (a refused one would get its 412 again).
 	pool     [retryPoolSize]journal
 	poolLen  int
 	poolNext int

@@ -15,12 +15,16 @@ pkg/kit/
 ├── serve.go      # Serve: http.Server with graceful shutdown, cancelling requests left at the deadline
 ├── handler.go    # Handler: the filter chain, /metrics, the body cap, and the probes (/healthz, /readyz)
 ├── ready.go      # readyz: readiness, with an optional dependency check under a 2s timeout
-├── decode.go     # Decode: a JSON body into a proto message, strictly, every failure a coded 400
-├── respond.go    # Respond, RespondCreated: a proto message as JSON with the proto field names, or binary if the caller asks
-├── client.go     # Get: call another service, binary protobuf, request ID passed on, read leniently, on a pool of at most 100 connections per service
+├── decode.go     # Decode: a JSON or binary protobuf body into a proto message, strictly, every failure a coded 400
+├── respond.go    # Respond, RespondCreated, RespondAt (with a Location): a proto message as JSON with the proto field names, or binary if the caller asks
+├── client.go     # Get and Post: call another service, binary protobuf, request ID passed on, read leniently, on a pool of at most 100 connections per service
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
+├── idempotency.go # CheckIdempotencyKey: the one set of rules for a caller's idempotency key, shared by every service that takes one
+├── deadline.go   # the caller's deadline (X-Request-Timeout), applied by Handler and passed on by Get and Post, minus a margin per hop
+├── refusal.go    # Refusal: is this terror a refusal for good (a 4xx), or worth retrying? One answer for every service
+├── serviceurl.go # ServiceURL: another service's base URL from a setting, checked at startup
 ├── uuid.go       # ParseUUID: caller text to a UUID, canonical form only, so one thing has one URL
-└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start and Get run a real service in integration tests
+└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start runs a real service, Serve runs routes as a service for one under test to call, and Get and Post send it requests, in integration tests
 ```
 
 ## The filter chain
@@ -28,17 +32,18 @@ pkg/kit/
 `Handler` wraps a service's router in filters, outermost first. The order matters, so keep it, and change it only with a test showing why:
 
 1. **Request ID**, so everything inside can log it.
-2. **Access log**, one line per request.
-3. **Metrics**, outside `ErrorFilter` so they see the final status. The route label comes from the routed request, or from `router.Pattern` when a response doesn't carry it (the 500 after a panic).
-4. **Typhon's `ErrorFilter`**, which turns a returned error into a response with the right status.
-5. **Clean errors**, just inside `ErrorFilter`, so the error it serialises is already safe: only a terror's code, message and params; stack and message chain stripped; anything else logged and replaced with a generic 500; 499 when the caller has gone.
-6. **Recover**, innermost, so a panic becomes an error the filters above handle like any other.
+2. **Deadline**: the caller's `X-Request-Timeout`, capped at 30s, put on the request's context. When it passes, the request is answered 504 (clean errors tells a passed deadline, `context.DeadlineExceeded`, from a caller hanging up, `context.Canceled`, which stays 499).
+3. **Access log**, one line per request.
+4. **Metrics**, outside `ErrorFilter` so they see the final status. The route label comes from the routed request, or from `router.Pattern` when a response doesn't carry it (the 500 after a panic).
+5. **Typhon's `ErrorFilter`**, which turns a returned error into a response with the right status.
+6. **Clean errors**, just inside `ErrorFilter`, so the error it serialises is already safe: only a terror's code, message and params; stack and message chain stripped; anything else logged and replaced with a generic 500; 499 when the caller has gone.
+7. **Recover**, innermost, so a panic becomes an error the filters above handle like any other.
 
 `/metrics` sits beside the chain, so scrapes aren't counted as traffic. Every body is capped at `MaxBodyBytes` before Typhon sees the request.
 
 ## Rules
 
-- **Grow only for a real consumer.** Add to the kit when a service needs it now, not because one might (the root tension rule). Binary request bodies, for example, wait for the first service that POSTs to another (Phase 8): until then, calls between services are GETs.
+- **Grow only for a real consumer.** Add to the kit when a service needs it now, not because one might (the root tension rule). Binary request bodies, for example, waited for the first service that POSTs to another (the transaction service, Phase 8).
 - **Nothing service-specific.** The kit never imports `services/` or `cmd/`, and never knows a route, table or field name. If only one service needs it, it stays in that service.
 - **Callers see only what's meant for them.** Anything that reaches a caller is a terror's code, message and params, never a stack, a message chain, a file path or a non-terror error's text. `TestErrorsReachTheCallerSafely` and kittest's "unknown routes" check guard this: keep both passing.
 - **A caller's mistake is a 4xx, never a 5xx.** A bad body, a cut-off upload or a caller hanging up must not count against the service's error rate, or alerts fire for problems that aren't ours.

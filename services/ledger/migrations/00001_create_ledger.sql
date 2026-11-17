@@ -17,7 +17,7 @@ CREATE TABLE accounts (
 );
 
 -- One funding account per currency. The IDs are fixed, and each ends in the
--- currency's ISO 4217 number, so callers can name them (ledger.FundingAccount).
+-- currency's ISO 4217 number, so callers can name them (funding.Account in pkg/funding).
 INSERT INTO accounts (id, kind, currency) VALUES
     ('00000000-0000-4000-8000-000000000826', 'funding', 'GBP'),
     ('00000000-0000-4000-8000-000000000978', 'funding', 'EUR'),

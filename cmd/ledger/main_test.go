@@ -24,27 +24,8 @@ func TestConformance(t *testing.T) {
 }
 
 func TestRoutesNeedsAnAccountURL(t *testing.T) {
-	tests := map[string]struct{ raw, want, wantErr string }{
-		"the cluster's":    {raw: "http://account", want: "http://account"},
-		"a trailing slash": {raw: "http://account/", want: "http://account"},
-		"with a port":      {raw: "http://127.0.0.1:8081", want: "http://127.0.0.1:8081"},
-		"missing":          {raw: "", wantErr: "ACCOUNT_URL is required"},
-		"no scheme":        {raw: "account", wantErr: "ACCOUNT_URL must be"},
-		"another scheme":   {raw: "ftp://account", wantErr: "ACCOUNT_URL must be"},
-		"with a path":      {raw: "http://account/accounts", wantErr: "ACCOUNT_URL must be"},
-	}
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := baseURL(tt.raw)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("baseURL(%q) = %q, %v; want an error containing %q", tt.raw, got, err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil || got != tt.want {
-				t.Fatalf("baseURL(%q) = %q, %v; want %q", tt.raw, got, err, tt.want)
-			}
-		})
+	err := routes(&typhon.Router{}, db.Deps{Getenv: func(string) string { return "" }, Metrics: prometheus.NewRegistry()})
+	if err == nil || !strings.Contains(err.Error(), "ACCOUNT_URL is required") {
+		t.Fatalf("err = %v, want ACCOUNT_URL is required", err)
 	}
 }

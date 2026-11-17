@@ -9,6 +9,8 @@ import (
 
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -31,10 +33,10 @@ func TestValidate(t *testing.T) {
 		{"a transfer", "k1", transfer, ""},
 		{"a fee: three entries", "k1", []Entry{{alice, gbp(-550)}, {bob, gbp(500)}, {carol, gbp(50)}}, ""},
 		{"key with every allowed character", "Aa0._:-", transfer, ""},
-		{"key at the limit", strings.Repeat("k", maxKeyLen), transfer, ""},
+		{"key at the limit", strings.Repeat("k", kit.MaxIdempotencyKeyLen), transfer, ""},
 
 		{"no key", "", transfer, "bad_request.idempotency_key"},
-		{"key too long", strings.Repeat("k", maxKeyLen+1), transfer, "bad_request.idempotency_key"},
+		{"key too long", strings.Repeat("k", kit.MaxIdempotencyKeyLen+1), transfer, "bad_request.idempotency_key"},
 		{"key with a space", "k 1", transfer, "bad_request.idempotency_key"},
 		{"key with a newline", "k\n1", transfer, "bad_request.idempotency_key"},
 
@@ -47,8 +49,8 @@ func TestValidate(t *testing.T) {
 		{"zero amount", "k1", []Entry{{alice, gbp(0)}, {bob, gbp(0)}}, "bad_request.entries"},
 		{"no account", "k1", []Entry{{uuid.Nil(), gbp(-500)}, {bob, gbp(500)}}, "bad_request.entries"},
 		{"same account twice", "k1", []Entry{{alice, gbp(-500)}, {alice, gbp(500)}}, "bad_request.entries"},
-		{"amount at the limit", "k1", []Entry{{alice, gbp(-maxAmount)}, {bob, gbp(maxAmount)}}, ""},
-		{"amount over the limit", "k1", []Entry{{alice, gbp(-maxAmount - 1)}, {bob, gbp(maxAmount + 1)}}, "bad_request.entries"},
+		{"amount at the limit", "k1", []Entry{{alice, gbp(-money.MaxAmount)}, {bob, gbp(money.MaxAmount)}}, ""},
+		{"amount over the limit", "k1", []Entry{{alice, gbp(-money.MaxAmount - 1)}, {bob, gbp(money.MaxAmount + 1)}}, "bad_request.entries"},
 		{"would overflow", "k1", []Entry{{alice, gbp(math.MaxInt64)}, {bob, gbp(1)}, {carol, gbp(math.MinInt64)}}, "bad_request.entries"},
 	}
 	for _, tt := range tests {
@@ -94,11 +96,11 @@ func TestValidateSortsWithoutTouchingTheCallersSlice(t *testing.T) {
 
 func TestFundingAccount(t *testing.T) {
 	for _, c := range []money.Currency{money.GBP(), money.EUR(), money.USD(), money.JPY()} {
-		if _, ok := FundingAccount(c); !ok {
+		if _, ok := funding.Account(c); !ok {
 			t.Errorf("no funding account for %s", c)
 		}
 	}
-	if _, ok := FundingAccount(money.Currency{}); ok {
+	if _, ok := funding.Account(money.Currency{}); ok {
 		t.Error("the zero currency has a funding account")
 	}
 }

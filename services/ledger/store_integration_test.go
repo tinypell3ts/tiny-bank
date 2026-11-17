@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/monzo/terrors"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -65,7 +67,7 @@ func checkInvariants(t *testing.T, s *Store) {
 
 func gbpFunding(t *testing.T) uuid.UUID {
 	t.Helper()
-	id, ok := FundingAccount(money.GBP())
+	id, ok := funding.Account(money.GBP())
 	if !ok {
 		t.Fatal("no GBP funding account")
 	}
@@ -115,7 +117,7 @@ func wantCode(t *testing.T, err error, code string) {
 func TestFundingAccountsAreSeeded(t *testing.T) {
 	s := newTestStore(t)
 	for _, c := range []money.Currency{money.GBP(), money.EUR(), money.USD(), money.JPY()} {
-		id, _ := FundingAccount(c)
+		id, _ := funding.Account(c)
 		b, err := s.Balance(t.Context(), id)
 		if err != nil {
 			t.Fatalf("%s funding account: %v", c, err)
@@ -142,11 +144,11 @@ func TestFundingAccountsAreSeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(fundingAccounts) {
-		t.Errorf("migrations create %d funding accounts, Go knows %d", len(got), len(fundingAccounts))
+	if len(got) != len(funding.All()) {
+		t.Errorf("migrations create %d funding accounts, Go knows %d", len(got), len(funding.All()))
 	}
 	for _, f := range got {
-		if want, ok := fundingAccounts[f.currency]; !ok || want != f.id {
+		if want, ok := funding.All()[f.currency]; !ok || want != f.id {
 			t.Errorf("funding account %s (%s) isn't the one FundingAccount returns for %s", f.id, f.currency, f.currency)
 		}
 	}
@@ -187,19 +189,94 @@ func TestPostRefusesAnOverdraft(t *testing.T) {
 	_, err = s.Balance(t.Context(), aaron)
 	wantCode(t, err, "not_found.account")
 
-	// A refused post doesn't use up its key, so once there's money the same
-	// request can go through.
+	// A new key, once there's money, goes through.
 	fund(t, s, alice, 1)
-	if _, created, err := postJournal(s, t.Context(), transfer("t1", alice, aaron, 101)); err != nil || !created {
-		t.Fatalf("retry after funding = %v, created %v; want it posted", err, created)
+	if _, created, err := postJournal(s, t.Context(), transfer("t2", alice, aaron, 101)); err != nil || !created {
+		t.Fatalf("a new request after funding = %v, created %v; want it posted", err, created)
 	}
 	wantBalance(t, s, alice, gbp(0))
+}
+
+// TestARefusedKeyStaysRefused: a key gets one final answer. Once refused, the
+// same request is refused again, even when it would go through now: its
+// caller was told "refused", and a late or repeated post with that key (a
+// stalled worker waking up, say) must never move the money afterwards.
+func TestARefusedKeyStaysRefused(t *testing.T) {
+	s := newTestStore(t)
+	fund(t, s, alice, 100)
+	_, _, err := postJournal(s, t.Context(), transfer("t1", alice, bob, 101))
+	wantCode(t, err, "precondition_failed.insufficient_funds")
+
+	fund(t, s, alice, 1000) // now it would go through
+	again, created, err := postJournal(s, t.Context(), transfer("t1", alice, bob, 101))
+	wantCode(t, err, "precondition_failed.insufficient_funds")
+	if created || again.ID != uuid.Nil() {
+		t.Errorf("repeat = %+v, created %v; want the same refusal, no journal", again, created)
+	}
+	wantBalance(t, s, alice, gbp(1100)) // nothing moved
+
+	// The same key for a different request is still a reused key.
+	_, _, err = postJournal(s, t.Context(), transfer("t1", alice, bob, 102))
+	wantCode(t, err, "precondition_failed.idempotency_key")
+
+	var refusals int
+	if err := s.pool.QueryRow(t.Context(), `SELECT count(*) FROM refusals WHERE idempotency_key = 't1'`).Scan(&refusals); err != nil || refusals != 1 {
+		t.Errorf("refusals for t1 = %d, %v; want the one refusal saved once", refusals, err)
+	}
+}
+
+// TestAKeyGetsOneAnswerUnderARace: many posts with one key, while the
+// account is funded part way through. Each would be refused before the
+// funding and posted after, but the key lock lets only the first decide,
+// so they all get the same answer, and only one of a journal or a refusal
+// is saved. The race is run for many rounds, each with its own key and
+// account, as a single round rarely lands in the window.
+func TestAKeyGetsOneAnswerUnderARace(t *testing.T) {
+	s := newTestStore(t)
+	gbpFund := gbpFunding(t)
+	for round := range 30 {
+		from, key := uuid.New(), "same-key-"+strconv.Itoa(round)
+		fund(t, s, from, 100)
+		answers := make([]string, 10)
+		errs := runConcurrently(len(answers)+1, func(i int) error {
+			if i == len(answers) {
+				_, _, err := postJournal(s, t.Context(), transfer("top-up-"+key, gbpFund, from, 1000))
+				return err
+			}
+			j, _, err := postJournal(s, t.Context(), transfer(key, from, bob, 300))
+			switch {
+			case err == nil:
+				answers[i] = "journal " + j.ID.String()
+			case hasCode(err, "precondition_failed.insufficient_funds"):
+				answers[i] = "refused"
+			default:
+				return err
+			}
+			return nil
+		})
+		if err := errors.Join(errs...); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		for _, a := range answers {
+			if a != answers[0] {
+				t.Fatalf("round %d: one key got different answers: %v", round, answers)
+			}
+		}
+		var journals, refusals int
+		if err := s.pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM journals WHERE idempotency_key = $1),
+			(SELECT count(*) FROM refusals WHERE idempotency_key = $1)`, key).Scan(&journals, &refusals); err != nil {
+			t.Fatal(err)
+		}
+		if journals+refusals != 1 {
+			t.Fatalf("round %d: %d journals and %d refusals saved for one key, want exactly one answer", round, journals, refusals)
+		}
+	}
 }
 
 func TestPostRefusesAnotherCurrency(t *testing.T) {
 	s := newTestStore(t)
 	fund(t, s, alice, 100) // alice's account now holds GBP
-	eurFunding, _ := FundingAccount(money.EUR())
+	eurFunding, _ := funding.Account(money.EUR())
 
 	_, _, err := postJournal(s, t.Context(), NewJournal{IdempotencyKey: "e1", Entries: []Entry{
 		{eurFunding, money.New(-100, money.EUR())}, {alice, money.New(100, money.EUR())},
@@ -358,6 +435,8 @@ func TestConcurrentRetriesPostOnce(t *testing.T) {
 func TestJournalsAndEntriesAreAppendOnly(t *testing.T) {
 	s := newTestStore(t)
 	fund(t, s, alice, 1000)
+	_, _, err := postJournal(s, t.Context(), transfer("too-much", alice, bob, 5000)) // a refusal to protect too
+	wantCode(t, err, "precondition_failed.insufficient_funds")
 
 	for _, sql := range []string{
 		`UPDATE entries SET amount = amount * 2`,
@@ -366,6 +445,9 @@ func TestJournalsAndEntriesAreAppendOnly(t *testing.T) {
 		`UPDATE journals SET currency = 'EUR'`,
 		`DELETE FROM journals`,
 		`TRUNCATE journals CASCADE`,
+		`UPDATE refusals SET code = 'x'`,
+		`DELETE FROM refusals`,
+		`TRUNCATE refusals`,
 	} {
 		if _, err := s.pool.Exec(t.Context(), sql); err == nil || !strings.Contains(err.Error(), "append-only") {
 			t.Errorf("%s: err = %v, want it refused as append-only", sql, err)

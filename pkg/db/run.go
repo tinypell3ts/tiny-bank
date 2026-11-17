@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,6 +28,15 @@ type Deps struct {
 	// Metrics is where the service registers its business metrics.
 	// kit.Handler serves them at GET /metrics with the HTTP metrics.
 	Metrics prometheus.Registerer
+	// Logger is the service's JSON logger, for work that isn't a request
+	// (kit.Handler logs requests itself).
+	Logger *slog.Logger
+	// Background adds work to run alongside the server, such as the
+	// transaction service's finisher. Call it from routes. The work starts
+	// once the database is migrated and must return when its context ends
+	// (the service shutting down); Run waits for it before closing the
+	// database.
+	Background func(work func(ctx context.Context))
 }
 
 // Routes adds a service's API to router, built from deps. An error, like a
@@ -66,7 +77,10 @@ func Run(name string, migrations fs.FS, routes Routes) func(ctx context.Context,
 
 		router := typhon.Router{}
 		reg := obs.NewRegistry()
-		if err := routes(&router, Deps{Pool: pool, Getenv: getenv, Metrics: reg}); err != nil {
+		var background []func(context.Context)
+		deps := Deps{Pool: pool, Getenv: getenv, Metrics: reg, Logger: logger,
+			Background: func(work func(context.Context)) { background = append(background, work) }}
+		if err := routes(&router, deps); err != nil {
 			return fmt.Errorf("routes: %w", err)
 		}
 
@@ -79,6 +93,18 @@ func Run(name string, migrations fs.FS, routes Routes) func(ctx context.Context,
 		if err != nil {
 			return fmt.Errorf("listen: %w", err)
 		}
+		// Background work runs until shutdown starts (ctx ends) or Serve
+		// fails, and is waited for before the deferred pool.Close, so it never
+		// loses its database mid-write. (Deferred calls run last first: stop,
+		// then wait, then close.)
+		var wg sync.WaitGroup
+		defer wg.Wait()
+		workCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		for _, work := range background {
+			wg.Go(func() { work(workCtx) })
+		}
+
 		var ready atomic.Bool
 		h := kit.Handler(logger, reg, &router, &ready, pool.Ping)
 		return kit.Serve(ctx, ln, h, &ready, logger, cfg.ShutdownTimeout)
