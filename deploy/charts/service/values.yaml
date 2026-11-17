@@ -49,8 +49,8 @@ database:
 
 # A small default that fits a service with little traffic, like hello. A
 # service under real load sets its own, sized from a load test (see
-# deploy/values/ledger.yaml). The chart passes the memory limit to Go as
-# GOMEMLIMIT, so the garbage collector works to stay under it.
+# deploy/values/ledger.yaml). The chart passes the memory limit to the service,
+# and kit.Main gives Go's garbage collector 90% of it to stay under.
 resources:
   requests:
     cpu: 50m # 5% of one CPU: what the scheduler reserves

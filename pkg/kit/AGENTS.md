@@ -8,7 +8,8 @@ A change here reaches every service at once, so it gets more care than service c
 
 ```
 pkg/kit/
-├── kit.go        # Main (signals, exit code) and NewLogger
+├── kit.go        # Main (signals, exit code, Go's memory limit from memory.go) and NewLogger
+├── memory.go     # memoryLimitFor: 90% of the container's memory limit, for Go's garbage collector
 ├── config.go     # Config and LoadConfig: PORT, LOG_LEVEL, SHUTDOWN_TIMEOUT
 ├── secret.go     # Secret: prints as xxxxx everywhere; Reveal() is the only way in
 ├── serve.go      # Serve: http.Server with graceful shutdown, cancelling requests left at the deadline

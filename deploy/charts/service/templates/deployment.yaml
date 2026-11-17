@@ -36,12 +36,13 @@ spec:
             - configMapRef:
                 name: {{ include "service.name" . }}
           env:
-            # Tells Go's garbage collector the container's memory limit, in
-            # bytes, taken from the limit itself so the two can't disagree.
-            # Without it, Go lets the heap grow to about twice the live data
-            # before collecting, which can pass the limit and get the pod
-            # killed (OOMKilled). With it, Go collects harder as it gets close.
-            - name: GOMEMLIMIT
+            # The container's memory limit, in bytes, taken from the limit itself
+            # so the two can't disagree. kit.Main gives Go's garbage collector
+            # 90% of it. Without a limit, Go lets the heap grow to about twice
+            # the live data before collecting, which can pass the limit and get
+            # the pod killed (OOMKilled). With it, Go collects harder as it gets
+            # close, and the last 10% covers memory Go doesn't count.
+            - name: MEMORY_LIMIT_BYTES
               valueFrom:
                 resourceFieldRef:
                   resource: limits.memory

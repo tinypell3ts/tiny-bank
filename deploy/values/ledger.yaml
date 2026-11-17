@@ -13,7 +13,7 @@ config:
 # Sized from a load test (make load-journals): at about 2,000 journals a
 # second the ledger peaked at 58 MB, against the chart's default 64 MiB
 # limit, and was OOMKilled when more requests ran at once. 256 MiB gives
-# room for bursts; GOMEMLIMIT (set by the chart) keeps Go under it.
+# room for bursts; kit.Main keeps Go under 90% of it.
 resources:
   requests:
     memory: 64Mi
