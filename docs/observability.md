@@ -78,7 +78,9 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 
 - **Following one request across services:** `kit.Get` passes the request ID on, so the same `request_id` is in the ledger's log lines and in the account service's lines for its checks. Each journal stores the request ID that posted it, so the audit trail leads from a movement of money to the logs of the request that made it.
 
-- **Tracing:** `kit.Main` sets up OpenTelemetry for every service ([tracing.go](../pkg/obs/tracing.go), [ADR-0011](adr/0011-trace-requests-with-opentelemetry-and-jaeger.md)). With `OTEL_EXPORTER_OTLP_ENDPOINT` set (the chart sets `http://jaeger.jaeger:4318`), spans are batched and sent over OTLP/HTTP in the background, and trace context travels between services as the W3C `traceparent` header. Without it, tracing is off. Export failures are logged as warnings and never affect a request. The shared filters don't create spans yet, so nothing is sent so far.
+- **Tracing:** `kit.Main` sets up OpenTelemetry for every service ([tracing.go](../pkg/obs/tracing.go), [ADR-0011](adr/0011-trace-requests-with-opentelemetry-and-jaeger.md)). With `OTEL_EXPORTER_OTLP_ENDPOINT` set (the chart sets `http://jaeger.jaeger:4318`), spans are batched and sent over OTLP/HTTP in the background, and trace context travels between services as the W3C `traceparent` header. Without it, tracing is off. Export failures are logged as warnings and never affect a request.
+
+  `kit.Handler` gives every request a server span ([tracing.go](../pkg/kit/tracing.go)), continuing the caller's trace or starting one. It's named and labelled like the metrics: `POST /transfers`, with `http.request.method`, `http.route`, `http.response.status_code`, and `error.type` (the terror code) on an error. Only a 5xx marks a span failed. Probes get no span. The access log line carries `trace_id` next to `request_id`, so a log line leads to its trace in Jaeger, and back. Calls to other services and database queries don't have spans yet, so each service's span is its own trace for now.
 
 ### On the cluster
 
