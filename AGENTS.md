@@ -87,7 +87,7 @@ Current:
 ├── services/ledger/     # ledger service code: double-entry journals, balances under row locks, idempotency keys, migrations/*.sql
 ├── services/transaction/ # transaction service code: transfers and deposits as a state machine (pending, then completed or failed), retried by a background finisher, migrations/*.sql
 ├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), Handler (Typhon router + shared filters + probes), Decode/Respond (protobuf as JSON), Secret
-│   └── kittest/         # Conformance: the checks every service's handler must pass (health, request IDs, errors, metrics); ConformanceOf runs them on a service's routes; Start runs a service for integration tests
+│   └── kittest/         # Conformance: the checks every service's handler must pass (health, request IDs, errors, metrics, tracing); ConformanceOf runs them on a service's routes; Start runs a service for integration tests; RecordSpans keeps a test's spans in memory
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED metrics (Track), tracing setup (StartTracing: OTLP/HTTP when OTEL_EXPORTER_OTLP_ENDPOINT is set)
 ├── pkg/db/              # Postgres: Run (a whole database service), LoadConfig (kit.Config + DATABASE_URL), Start (connect with retries, then migrate), Open a pgx pool, Migrate with goose behind an advisory lock
 │   └── dbtest/          # integration tests' Postgres (testcontainers): Database/Migrated (a fresh database on one server per package), StartPostgres (a server of its own)

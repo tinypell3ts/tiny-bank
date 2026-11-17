@@ -25,7 +25,7 @@ pkg/kit/
 ├── refusal.go    # Refusal: is this terror a refusal for good (a 4xx), or worth retrying? One answer for every service
 ├── serviceurl.go # ServiceURL: another service's base URL from a setting, checked at startup
 ├── uuid.go       # ParseUUID: caller text to a UUID, canonical form only, so one thing has one URL
-└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start runs a real service, Serve runs routes as a service for one under test to call, and Get and Post send it requests, in integration tests
+└── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start runs a real service, Serve runs routes as a service for one under test to call, and Get and Post send it requests, in integration tests; RecordSpans keeps a test's spans in memory
 ```
 
 ## The filter chain

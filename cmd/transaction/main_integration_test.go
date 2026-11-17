@@ -4,17 +4,13 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"iter"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/monzo/typhon"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
@@ -56,7 +52,7 @@ func decode(t *testing.T, body string) transferBody {
 // service (posting to the ledger).
 type bank struct {
 	base, ledgerURL, accountURL string
-	logs                        fmt.Stringer
+	logs                        *kittest.Logs
 }
 
 func startBank(t *testing.T) bank {
@@ -90,43 +86,42 @@ func (b bank) open(t *testing.T) string {
 // ledger's balances agree.
 func TestTransactionAPIEndToEnd(t *testing.T) {
 	b := startBank(t)
-	base, ledgerURL, logs := b.base, b.ledgerURL, b.logs
-	if !strings.Contains(logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql","00003_lease_transfers.sql"]`) {
-		t.Errorf("expected the migration to be logged, got:\n%s", logs)
+	if !strings.Contains(b.logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql","00003_lease_transfers.sql"]`) {
+		t.Errorf("expected the migration to be logged, got:\n%s", b.logs)
 	}
 	alice, bob := b.open(t), b.open(t)
 
-	status, _, body := post(t, base+"/deposits", `{"idempotency_key":"d1","account_id":"`+alice+`","currency":"GBP","amount":1000}`)
+	status, _, body := post(t, b.base+"/deposits", `{"idempotency_key":"d1","account_id":"`+alice+`","currency":"GBP","amount":1000}`)
 	if d := decode(t, body); status != http.StatusCreated || d.State != "TRANSFER_STATE_COMPLETED" || d.JournalID == "" {
 		t.Fatalf("deposit = %d %s, want 201 completed with a journal", status, body)
 	}
 
 	transfer := `{"idempotency_key":"t1","from_account_id":"` + alice + `","to_account_id":"` + bob + `","currency":"GBP","amount":300}`
-	status, header, first := post(t, base+"/transfers", transfer)
+	status, header, first := post(t, b.base+"/transfers", transfer)
 	tr := decode(t, first)
 	if status != http.StatusCreated || tr.State != "TRANSFER_STATE_COMPLETED" || header.Get("Location") != "/transfers/"+tr.ID {
 		t.Fatalf("transfer = %d %s, want 201 completed with its Location", status, first)
 	}
-	if again, _, b := post(t, base+"/transfers", transfer); again != http.StatusOK || decode(t, b).ID != tr.ID {
+	if again, _, b := post(t, b.base+"/transfers", transfer); again != http.StatusOK || decode(t, b).ID != tr.ID {
 		t.Errorf("retry = %d %s, want 200 with the same transfer", again, b)
 	}
 
 	tooMuch := `{"idempotency_key":"t2","from_account_id":"` + alice + `","to_account_id":"` + bob + `","currency":"GBP","amount":5000}`
-	status, _, body = post(t, base+"/transfers", tooMuch)
+	status, _, body = post(t, b.base+"/transfers", tooMuch)
 	if f := decode(t, body); status != http.StatusCreated || f.State != "TRANSFER_STATE_FAILED" || f.FailureReason != "precondition_failed.insufficient_funds" {
 		t.Errorf("overdraft = %d %s, want 201 failed for insufficient funds", status, body)
 	}
 
 	for id, want := range map[string]string{alice: "700", bob: "300"} {
-		_, got := kittest.Get(t, ledgerURL+"/accounts/"+id+"/balance")
+		_, got := kittest.Get(t, b.ledgerURL+"/accounts/"+id+"/balance")
 		if !strings.Contains(got, `"amount":"`+want+`"`) {
 			t.Errorf("ledger balance of %s = %s, want %s", id, got, want)
 		}
 	}
-	if status, got := kittest.Get(t, base+"/transfers/"+tr.ID); status != http.StatusOK || decode(t, got).JournalID != tr.JournalID {
+	if status, got := kittest.Get(t, b.base+"/transfers/"+tr.ID); status != http.StatusOK || decode(t, got).JournalID != tr.JournalID {
 		t.Errorf("GET = %d %s, want the completed transfer", status, got)
 	}
-	if strings.Contains(logs.String(), dbtest.Password) {
+	if strings.Contains(b.logs.String(), dbtest.Password) {
 		t.Error("logs leak the database password")
 	}
 }
@@ -135,11 +130,7 @@ func TestTransactionAPIEndToEnd(t *testing.T) {
 // across all three services, each hop under the one that called it:
 // transaction → ledger → account.
 func TestADepositIsOneTrace(t *testing.T) {
-	exporter := tracetest.NewInMemoryExporter()
-	prevProvider, prevPropagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
-	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)))
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-	t.Cleanup(func() { otel.SetTracerProvider(prevProvider); otel.SetTextMapPropagator(prevPropagator) })
+	exporter := kittest.RecordSpans(t)
 
 	b := startBank(t)
 	alice := b.open(t)
@@ -155,7 +146,13 @@ func TestADepositIsOneTrace(t *testing.T) {
 			byName[s.Name] = s
 		}
 	}
-	host := func(url string) string { return strings.TrimPrefix(url, "http://") }
+	host := func(base string) string { // a client span is named by host name, without the port
+		u, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u.Hostname()
+	}
 	chain := []string{ // each span's parent is the one before it
 		"POST /deposits",
 		"POST " + host(b.ledgerURL),
@@ -168,20 +165,10 @@ func TestADepositIsOneTrace(t *testing.T) {
 			t.Fatalf("no %q span in trace %s; got %v", name, traceID, names(byName))
 		}
 	}
-	for parent, child := range pairs(chain) {
-		if byName[child].Parent.SpanID() != byName[parent].SpanContext.SpanID() {
-			t.Errorf("%q isn't under %q", child, parent)
-		}
-	}
-}
-
-// pairs yields each item of s with the one after it.
-func pairs(s []string) iter.Seq2[string, string] {
-	return func(yield func(string, string) bool) {
-		for i := 1; i < len(s); i++ {
-			if !yield(s[i-1], s[i]) {
-				return
-			}
+	for i := 1; i < len(chain); i++ {
+		parent, child := byName[chain[i-1]], byName[chain[i]]
+		if child.Parent.SpanID() != parent.SpanContext.SpanID() {
+			t.Errorf("%q isn't under %q", chain[i], chain[i-1])
 		}
 	}
 }
