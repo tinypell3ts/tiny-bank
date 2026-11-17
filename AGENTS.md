@@ -67,6 +67,7 @@ Current:
 ├── Tiltfile             # dev loop: build + deploy + port-forward every service, redeploy on save
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
+├── tools/journalload/   # load generator: posts random journals to the ledger at a set rate (make load-journals)
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: its migrations and routes, run by db.Run
@@ -123,6 +124,7 @@ make cnpg-down                # remove the operator (CRDs and databases stay)
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
+make load-journals RATE=5 DURATION=1m # with make dev running: post random journals to the ledger, then print a summary
 make dev-down                 # remove what Tilt deployed, INCLUDING every service database and its data (cluster, monitoring, CloudNativePG stay)
 ```
 

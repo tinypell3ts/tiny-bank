@@ -70,7 +70,14 @@ Alice now has 700 and Bob 300:
 curl -s localhost:8082/accounts/$ALICE/balance | jq; curl -s localhost:8082/accounts/$BOB/balance | jq
 ```
 
-The [tiny-bank / Ledger](http://localhost:3000/d/tiny-bank-ledger) dashboard shows the posts within a minute. To see the audit trail refuse a change:
+The [tiny-bank / Ledger](http://localhost:3000/d/tiny-bank-ledger) dashboard shows the posts within a minute. To give it steady traffic, run the load generator ([tools/journalload](../../tools/journalload/main.go)). It opens its own accounts, funds them, then posts random transfers, some of them retries and some refused for insufficient funds, and prints a summary of results and latency:
+
+```bash
+make load-journals RATE=20 DURATION=2m
+```
+
+Other settings, such as how much each account starts with or how many requests are retries, go in `ARGS`; `make load-journals ARGS=-h` lists them.
+ To see the audit trail refuse a change:
 
 ```bash
 kubectl --context kind-tiny-bank exec -it ledger-db-1 -c postgres -- psql app -c "DELETE FROM entries"
