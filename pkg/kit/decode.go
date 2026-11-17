@@ -15,37 +15,50 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // MaxBodyBytes caps a request body. Requests are small, so this is
 // generous, and stops a caller tying up memory with a huge body.
 const MaxBodyBytes = 16 << 10
 
-// Decode reads req's JSON body into m, the service's protobuf request
-// message, strictly. Fields use the proto names (customer_id); the JSON
-// names (customerId) are accepted too. Any failure is a terrors bad_request
+// Decode reads req's body into m, the service's protobuf request message,
+// strictly. The body is JSON, with the proto field names (customer_id; the
+// JSON names, customerId, are accepted too), or binary protobuf, as other
+// services send it through kit.Post. Any failure is a terrors bad_request
 // with a message that's safe to show the caller:
 //
-//   - the Content-Type must be application/json (bad_request.content_type),
-//     so a browser can't send it cross-site as a "simple" text/plain request
+//   - the Content-Type must be application/json or application/protobuf
+//     (bad_request.content_type), so a browser can't send it cross-site as a
+//     "simple" text/plain request
 //   - the body must be at most MaxBodyBytes (bad_request.too_large)
 //   - a body that can't be read, such as an upload cut off part way, is the
 //     caller's fault too (bad_request.unreadable_body), not a server error
 //   - it must be one JSON object, with only fields m has, each with a valid
 //     value (bad_request.invalid_json), so a typo like "currancy" is an error
 //     instead of being silently ignored, and the message names it
+//   - binary must be valid protobuf, with no field number and no enum value
+//     m doesn't define, anywhere in the message (bad_request.invalid_proto).
+//     proto.Unmarshal alone keeps both quietly, so binary would be lenient
+//     where JSON is strict, and the deploy-order rules in proto/AGENTS.md
+//     would only hold for JSON.
 //
 // Being strict means a new request field must reach the service before
 // callers send it (proto/AGENTS.md). Typhon's own req.Decode is lenient on
 // all of these, so services use this.
 func Decode(req typhon.Request, m proto.Message) error {
-	if mediaType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type")); mediaType != "application/json" {
-		return terrors.BadRequest("content_type", "Content-Type must be application/json", nil)
+	mediaType, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if mediaType != "application/json" && mediaType != protobufType {
+		return terrors.BadRequest("content_type", "Content-Type must be application/json or application/protobuf", nil)
 	}
 	body, err := readBody(req)
 	if err != nil {
 		return err
+	}
+	if mediaType == protobufType {
+		return decodeProtobuf(body, m)
 	}
 	// protojson rejects null and empty bodies too, but this says so plainly.
 	if !isJSONObject(body) {
@@ -106,4 +119,58 @@ func invalidJSONMessage(body []byte, m proto.Message) string {
 		}
 	}
 	return "request body's fields must each appear once, with a value of the right type"
+}
+
+// decodeProtobuf reads binary protobuf into m, and refuses anything m
+// doesn't define, as protojson does for JSON.
+func decodeProtobuf(body []byte, m proto.Message) error {
+	if err := proto.Unmarshal(body, m); err != nil {
+		return terrors.BadRequest("invalid_proto", "request body must be valid protobuf", nil)
+	}
+	if problem := undefinedIn(m.ProtoReflect()); problem != "" {
+		return terrors.BadRequest("invalid_proto", problem, nil)
+	}
+	return nil
+}
+
+// undefinedIn describes the first field number or enum value in m, or in any
+// message inside it, that m's definition doesn't have, or returns "". The
+// message names a field only by its number, which is safe to repeat back.
+func undefinedIn(m protoreflect.Message) string {
+	if unknown := m.GetUnknown(); len(unknown) > 0 {
+		if num, _, n := protowire.ConsumeTag(unknown); n > 0 {
+			return fmt.Sprintf("request body has an unknown field (number %d)", num)
+		}
+		return "request body has an unknown field"
+	}
+	var problem string
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		switch {
+		case fd.IsList():
+			for i, list := 0, v.List(); i < list.Len() && problem == ""; i++ {
+				problem = undefinedInValue(fd, list.Get(i))
+			}
+		case fd.IsMap():
+			v.Map().Range(func(_ protoreflect.MapKey, mv protoreflect.Value) bool {
+				problem = undefinedInValue(fd.MapValue(), mv)
+				return problem == ""
+			})
+		default:
+			problem = undefinedInValue(fd, v)
+		}
+		return problem == ""
+	})
+	return problem
+}
+
+func undefinedInValue(fd protoreflect.FieldDescriptor, v protoreflect.Value) string {
+	switch fd.Kind() {
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		return undefinedIn(v.Message())
+	case protoreflect.EnumKind:
+		if fd.Enum().Values().ByNumber(v.Enum()) == nil {
+			return fmt.Sprintf("request body's field %s has an enum value this service doesn't know", fd.Name())
+		}
+	}
+	return ""
 }

@@ -180,3 +180,53 @@ func TestGetReusesAPoolOfConnections(t *testing.T) {
 		t.Errorf("%d calls opened %d connections; want at most %d, reused across bursts", bursts*perBurst, n, maxConnsPerHost)
 	}
 }
+
+func TestPostSendsBinaryAndReadsTheAnswer(t *testing.T) {
+	base := otherService(t, func(r *typhon.Router) {
+		r.POST("/things", func(req typhon.Request) typhon.Response {
+			var in typepb.Type
+			if err := Decode(req, &in); err != nil {
+				return typhon.Response{Error: err}
+			}
+			if in.GetName() == "bad" {
+				return typhon.Response{Error: terrors.PreconditionFailed("thing", "not that one", nil)}
+			}
+			// Echo what arrived, with the content type and request ID it came with.
+			return Respond(req, &typepb.Type{Name: in.GetName() + " " + req.Header.Get("Content-Type") + " " + RequestIDFrom(req.Context)}, http.StatusCreated)
+		})
+	})
+
+	var got apipb.Mixin
+	if err := Post(handling(t, "req-7"), base+"/things", &typepb.Type{Name: "Ada"}, &got); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if got.GetName() != "Ada application/protobuf req-7" {
+		t.Errorf("the other service saw %q, want the body, binary, and the request ID", got.GetName())
+	}
+
+	err := Post(t.Context(), base+"/things", &typepb.Type{Name: "bad"}, &apipb.Mixin{})
+	var terr *terrors.Error
+	if !errors.As(err, &terr) || terr.Code != "precondition_failed.thing" {
+		t.Fatalf("err = %v, want the other service's precondition_failed.thing", err)
+	}
+}
+
+// TestPostIsStrictOnTheOtherSide: a field the other service's message
+// doesn't have is refused there, as JSON would be, so binary callers follow
+// the same deploy order (proto/AGENTS.md).
+func TestPostIsStrictOnTheOtherSide(t *testing.T) {
+	base := otherService(t, func(r *typhon.Router) {
+		r.POST("/things", func(req typhon.Request) typhon.Response {
+			var in apipb.Mixin // has name (1) and root (2), but not syntax (6)
+			if err := Decode(req, &in); err != nil {
+				return typhon.Response{Error: err}
+			}
+			return Respond(req, &in, http.StatusOK)
+		})
+	})
+	err := Post(t.Context(), base+"/things", &typepb.Type{Name: "Ada", Syntax: typepb.Syntax_SYNTAX_EDITIONS}, &apipb.Mixin{})
+	var terr *terrors.Error
+	if !errors.As(err, &terr) || terr.Code != "bad_request.invalid_proto" {
+		t.Fatalf("err = %v, want bad_request.invalid_proto from the other service", err)
+	}
+}

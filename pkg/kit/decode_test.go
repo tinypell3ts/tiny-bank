@@ -1,6 +1,7 @@
 package kit
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/sourcecontextpb"
 	"google.golang.org/protobuf/types/known/typepb"
 )
 
@@ -47,7 +51,7 @@ func TestDecode(t *testing.T) {
 
 		{"no Content-Type", "", `{"name":"Ada"}`, "bad_request.content_type", ""},
 		{"text/plain (a cross-site simple request)", "text/plain", `{"name":"Ada"}`, "bad_request.content_type", ""},
-		{"binary protobuf isn't served yet", "application/protobuf", `{"name":"Ada"}`, "bad_request.content_type", ""},
+		{"another binary type", "application/octet-stream", `{"name":"Ada"}`, "bad_request.content_type", ""},
 		{"one byte over the limit", "application/json", limit(1), "bad_request.too_large", ""},
 
 		{"empty body", "application/json", ``, "bad_request.invalid_json", "request body must be a JSON object"},
@@ -112,6 +116,66 @@ func TestDecodeReadErrors(t *testing.T) {
 			var terr *terrors.Error
 			if !errors.As(err, &terr) || terr.Code != tt.wantCode {
 				t.Errorf("err = %v, want %s", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+// withField appends one encoded field to b: number num with a varint value.
+func withField(b []byte, num protowire.Number, v uint64) []byte {
+	return protowire.AppendVarint(protowire.AppendTag(b, num, protowire.VarintType), v)
+}
+
+// nested wraps inner as field num, length-delimited, as protobuf encodes a
+// message inside a message.
+func nested(b []byte, num protowire.Number, inner []byte) []byte {
+	return protowire.AppendBytes(protowire.AppendTag(b, num, protowire.BytesType), inner)
+}
+
+func mustMarshal(t *testing.T, m proto.Message) []byte {
+	t.Helper()
+	b, err := proto.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestDecodeBinary: binary is as strict as JSON. typepb.Type's fields are
+// name 1, fields 2 (repeated typepb.Field), source_context 5 and syntax 6
+// (an enum); 99 is a number none of them use.
+func TestDecodeBinary(t *testing.T) {
+	ada := mustMarshal(t, &typepb.Type{Name: "Ada", Syntax: typepb.Syntax_SYNTAX_PROTO3,
+		SourceContext: &sourcecontextpb.SourceContext{FileName: "a.proto"}})
+	tests := []struct {
+		name        string
+		body        []byte
+		wantCode    string // empty means it decodes
+		wantMessage string // a substring, checked when set
+	}{
+		{"a message", ada, "", ""},
+		{"an empty message is all defaults", nil, "", ""},
+		{"an unknown field", withField(ada, 99, 1), "bad_request.invalid_proto", "unknown field (number 99)"},
+		{"an unknown field in a nested message", nested(ada, 5, withField(nil, 99, 1)), "bad_request.invalid_proto", "number 99"},
+		{"an unknown field in a list of messages", nested(ada, 2, withField(nil, 99, 1)), "bad_request.invalid_proto", "number 99"},
+		{"an enum value it doesn't know", withField(ada, 6, 42), "bad_request.invalid_proto", "syntax has an enum value"},
+		{"a known field with the wrong wire type", withField(nil, 1, 7), "bad_request.invalid_proto", "number 1"},
+		{"not protobuf", []byte{0xff, 0xff, 0xff}, "bad_request.invalid_proto", "valid protobuf"},
+		{"one byte over the limit", make([]byte, MaxBodyBytes+1), "bad_request.too_large", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got typepb.Type
+			err := Decode(bodyRequest(t, "application/protobuf", bytes.NewReader(tt.body)), &got)
+			if tt.wantCode == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want it decoded", err)
+				}
+				return
+			}
+			var terr *terrors.Error
+			if !errors.As(err, &terr) || terr.Code != tt.wantCode || !strings.Contains(terr.Message, tt.wantMessage) {
+				t.Fatalf("err = %v, want %s containing %q", err, tt.wantCode, tt.wantMessage)
 			}
 		})
 	}

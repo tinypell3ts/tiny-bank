@@ -7,9 +7,11 @@
 // The ledger service's API: moving money between accounts, and reading
 // balances. The ledger is the one record of every movement of money.
 //
-// It's internal, called by other services. Requests are JSON, using these
-// field names (idempotency_key). Responses are JSON too, or binary protobuf
-// for a caller that sends Accept: application/protobuf.
+// It's internal, called by other services. Requests and responses are JSON,
+// using these field names (idempotency_key), or binary protobuf, as other
+// services send them through kit.Post (Content-Type and Accept:
+// application/protobuf). Both are strict about fields and enum values the
+// ledger doesn't know.
 //
 //   POST /journals              PostJournalRequest -> Journal
 //                               (201 with a Location header; 200 with the

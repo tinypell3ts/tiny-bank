@@ -104,29 +104,48 @@ func forwardRequestID(req typhon.Request, next typhon.Service) typhon.Response {
 // and decide what to tell your own caller: passing it on unchanged tells them
 // about a service they didn't call.
 func Get(ctx context.Context, url string, m proto.Message) error {
+	return call(ctx, http.MethodGet, url, nil, m)
+}
+
+// Post sends body to url on another tiny-bank service, as binary protobuf,
+// and reads the answer into m, exactly as Get does (timeout, request ID,
+// lenient reading, the other service's terror on an error).
+//
+// A Post that times out or loses its connection is ambiguous: the other
+// service may or may not have acted on it. So only Post what's safe to send
+// again, such as a journal with an idempotency key, and retry with the same
+// key until you get an answer.
+func Post(ctx context.Context, url string, body, m proto.Message) error {
+	return call(ctx, http.MethodPost, url, body, m)
+}
+
+func call(ctx context.Context, method, url string, body, m proto.Message) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 
-	req := typhon.NewRequest(ctx, http.MethodGet, url, nil)
+	req := typhon.NewRequest(ctx, method, url, nil)
 	req.Header.Set("Accept", protobufType)
+	if body != nil {
+		req.EncodeAsProtobuf(body) // sets Content-Type: application/protobuf
+	}
 	rsp := req.SendVia(client).Response()
 	if rsp.Error != nil {
-		return fmt.Errorf("get %s: %w", url, rsp.Error)
+		return fmt.Errorf("%s %s: %w", method, url, rsp.Error)
 	}
 	defer func() { _ = rsp.Body.Close() }()
 
 	if mediaType, _, _ := mime.ParseMediaType(rsp.Header.Get("Content-Type")); mediaType != protobufType {
-		return fmt.Errorf("get %s: %w", url, terrors.BadResponse("content_type", "response isn't binary protobuf", nil))
+		return fmt.Errorf("%s %s: %w", method, url, terrors.BadResponse("content_type", "response isn't binary protobuf", nil))
 	}
 	b, err := io.ReadAll(rsp.Body) // capped at maxResponseBytes+1 by capBody
 	if err != nil {
-		return fmt.Errorf("get %s: read response: %w", url, err)
+		return fmt.Errorf("%s %s: read response: %w", method, url, err)
 	}
 	if len(b) > maxResponseBytes {
-		return fmt.Errorf("get %s: %w", url, terrors.BadResponse("too_large", "response is too large", nil))
+		return fmt.Errorf("%s %s: %w", method, url, terrors.BadResponse("too_large", "response is too large", nil))
 	}
 	if err := proto.Unmarshal(b, m); err != nil { // lenient: unknown fields are kept and ignored
-		return fmt.Errorf("get %s: %w", url, terrors.BadResponse("invalid_proto", "response isn't valid protobuf", nil))
+		return fmt.Errorf("%s %s: %w", method, url, terrors.BadResponse("invalid_proto", "response isn't valid protobuf", nil))
 	}
 	return nil
 }
