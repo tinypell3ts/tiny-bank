@@ -2,7 +2,7 @@
 
 A small core banking platform built from **Go microservices, Postgres, Kafka and Kubernetes**.
 
-> **Status:** Phase 6, done. Two services on a local Kubernetes cluster with a one-command dev loop: `hello`, and the **account service**, which opens and looks up accounts in its own Postgres. Both are built on a shared foundation (`pkg/kit`) on Typhon and terrors, which gives every service the same request IDs, logs, metrics and safe errors, checked by one conformance suite. The account API is a protobuf contract that CI checks for breaking changes. Prometheus and Grafana run on the cluster, with `pkg/money` for amounts and `pkg/db` for connections and migrations.
+> **Status:** Phase 7, done. Three services on a local Kubernetes cluster with a one-command dev loop: `hello`; the **account service**, which opens and looks up accounts; and the **ledger**, which records every movement of money as double-entry journals, with balances that can't race or go negative, idempotency keys so a retry moves money once, and an append-only audit trail. The ledger checks each account with the account service, the first call between services. Every service is built on a shared foundation (`pkg/kit`, `pkg/db`) on Typhon and terrors, which gives them the same startup, request IDs, logs, metrics and safe errors, checked by one conformance suite. Their APIs are protobuf contracts that CI checks for breaking changes. Prometheus and Grafana run on the cluster, with a dashboard for the ledger.
 
 ## What it will be
 
@@ -47,7 +47,7 @@ make dev            # creates the cluster if needed, then starts Tilt
 curl localhost:8080/healthz
 ```
 
-Tilt builds the images, deploys them with Helm and forwards `hello` to `localhost:8080` and `account` to `localhost:8081`. It also installs Prometheus and Grafana, and the CloudNativePG operator that will run each service's Postgres database: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (**this deletes each service's database and everything in it**, such as accounts; monitoring and CloudNativePG stay; `make monitoring-down` and `make cnpg-down` remove them), and `make cluster-down` to delete the cluster.
+Tilt builds the images, deploys them with Helm and forwards `hello` to `localhost:8080`, `account` to `localhost:8081` and `ledger` to `localhost:8082`. It also installs Prometheus and Grafana, and the CloudNativePG operator that will run each service's Postgres database: Grafana is at [localhost:3000](http://localhost:3000) (no login locally, see the *tiny-bank / Services (RED)* dashboard) and Prometheus at [localhost:9090](http://localhost:9090). The first install takes a few minutes. It rebuilds and redeploys whenever you save a Go file. Press `space` to open the dashboard (localhost:10350), Ctrl-C to stop watching, `make dev-down` to remove what Tilt deployed (**this deletes each service's database and everything in it**, such as accounts; monitoring and CloudNativePG stay; `make monitoring-down` and `make cnpg-down` remove them), and `make cluster-down` to delete the cluster.
 
 Open an account and look it up (the account service has its own Postgres, created on the first `make dev`):
 
@@ -57,6 +57,16 @@ curl -i -X POST localhost:8081/accounts -H 'Content-Type: application/json' \
 ```
 
 The response's `Location` header is the account's address, for example `curl localhost:8081/accounts/<id>`. The API is internal for now: it has no sign-in until the edge gateway in Phase 12.
+
+Move £10 into an account from outside the bank, through the GBP funding account, then read its balance (amounts are in pence, and come back as strings):
+
+```bash
+curl -i -X POST localhost:8082/journals -H 'Content-Type: application/json' \
+  -d '{"idempotency_key":"deposit-1","currency":"GBP","entries":[{"account_id":"00000000-0000-4000-8000-000000000826","amount":-1000},{"account_id":"<account id>","amount":1000}]}'
+curl localhost:8082/accounts/<account id>/balance
+```
+
+Send the same request again and you get the same journal back with a 200: the idempotency key makes a retry safe. The ledger checks each account with the account service first, so use the ID of an account you opened above.
 
 Without Tilt, for a one-off deploy:
 

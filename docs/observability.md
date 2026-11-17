@@ -18,7 +18,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 1 | Kubernetes liveness/readiness probes using those endpoints, logs via `kubectl logs` and the Tilt dashboard ✅ |
 | 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard ✅ |
 | 5.5 | Shared Typhon filters in `pkg/kit` for request IDs, access logs and RED metrics, applied to every service ✅ |
-| 7 | Request ID passed on to downstream services in Typhon client calls, so one ID follows a request across services; ledger audit trail and business metrics |
+| 7 | Request ID passed on to downstream services by `kit.Get`, so one ID follows a request across services, and stored on each journal; ledger business metrics and dashboard ✅ |
 | 8 | OpenTelemetry tracing across services |
 | 10–11 | Trace context in Kafka headers, outbox backlog and consumer lag metrics |
 | 13 | Dashboards and alert rules |
@@ -57,6 +57,17 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
   histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))  # p95 latency
   ```
 
+- **Business metrics:** a service registers metrics about its own work on `db.Deps.Metrics`, and they're served at the same `/metrics`. The ledger's ([metrics.go](../services/ledger/metrics.go)):
+
+  | Metric | Type | Labels | Answers |
+  |---|---|---|---|
+  | `ledger_journals_total` | counter | `currency`, `outcome` (`posted`, `retried`, `refused`, `failed`), `reason` (a refusal's terror code) | How much money moving is happening, how often retries arrive, and why posts are refused |
+  | `ledger_moved_minor_units_total` | counter | `currency` | How much money new journals move, in minor units (pence for GBP) |
+
+  Every label has a fixed set of values, never an account ID or an amount. Every refusal is counted once, including those the HTTP handler turns away before the ledger's rules run (invalid JSON, an unsupported currency, a malformed account ID), with currency `unknown` when there isn't a supported one yet. `reason` is a refusal's terror code, which is always one of the ledger's or `kit.Decode`'s own constants: none is built from what a caller sent, and the account service's codes are turned into the ledger's before they could reach a label.
+
+- **Following one request across services:** `kit.Get` passes the request ID on, so the same `request_id` is in the ledger's log lines and in the account service's lines for its checks. Each journal stores the request ID that posted it, so the audit trail leads from a movement of money to the logs of the request that made it.
+
 ### On the cluster
 
 `make dev` (or `make monitoring` on its own) installs [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) into the `monitoring` namespace, with settings in [deploy/monitoring/values.yaml](../deploy/monitoring/values.yaml):
@@ -89,5 +100,7 @@ Each service database (`database.enabled` in the chart) comes with a `PodMonitor
 
 It leaves out Kubernetes probes (`/healthz`, `/readyz`) and Prometheus scrapes (`/metrics`). Kubernetes calls the probes every few seconds, so they would otherwise swamp real traffic and make latency look better than it is. 4xx responses count as traffic but not as errors, because they are the caller's mistake.
 
-The dashboard is [a JSON file in git](../deploy/monitoring/dashboards/tiny-bank-services.json). `make dashboards` puts it in a ConfigMap labelled `grafana_dashboard=1`, and Grafana's sidecar container loads it within seconds. Under `make dev`, Tilt does this every time the file is saved.
+[tiny-bank / Ledger](http://localhost:3000/d/tiny-bank-ledger) shows what happens to money: journals posted per second, the share refused (the caller's fault) and failed (ours), posts by outcome, refusals by reason, and money moved by currency: in each interval, and in total for the time range. "Money moved" is volume (each journal's positive entries), because the net is always zero. Every series the ledger can name in advance (money moved, and posts posted, retried or failed, for every currency) starts at 0, so Prometheus sees the first journal as an increase. Refusal series appear on each reason's first refusal, so the dashboard misses that first one.
+
+The dashboards are JSON files in git ([services](../deploy/monitoring/dashboards/tiny-bank-services.json), [ledger](../deploy/monitoring/dashboards/tiny-bank-ledger.json)). `make dashboards` puts it in a ConfigMap labelled `grafana_dashboard=1`, and Grafana's sidecar container loads it within seconds. Under `make dev`, Tilt does this every time the file is saved.
 

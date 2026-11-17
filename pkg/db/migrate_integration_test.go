@@ -1,6 +1,6 @@
 //go:build integration
 
-package db
+package db_test
 
 import (
 	"context"
@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 )
 
 var (
-	goodMigrations   = os.DirFS("testdata/migrations")
+	goodMigrations   = os.DirFS("testdata/good")
 	brokenMigrations = os.DirFS("testdata/broken")
 )
 
@@ -24,7 +26,7 @@ func openTestDB(t *testing.T, dsn string) *pgxpool.Pool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	pool, err := Open(ctx, dsn)
+	pool, err := db.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -36,7 +38,7 @@ func TestMigrateAppliesInOrderThenNothing(t *testing.T) {
 	pool := openTestDB(t, startPostgres(t))
 	ctx := t.Context()
 
-	applied, err := Migrate(ctx, pool, goodMigrations)
+	applied, err := db.Migrate(ctx, pool, goodMigrations)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -55,7 +57,7 @@ func TestMigrateAppliesInOrderThenNothing(t *testing.T) {
 	}
 
 	// Every startup calls Migrate. The second time there's nothing to do.
-	again, err := Migrate(ctx, pool, goodMigrations)
+	again, err := db.Migrate(ctx, pool, goodMigrations)
 	if err != nil || len(again) != 0 {
 		t.Fatalf("second Migrate applied %v, %v; want nothing", again, err)
 	}
@@ -76,12 +78,12 @@ func TestMigrateIsSafeWhenPodsStartTogether(t *testing.T) {
 	// exists. (On a brand-new database goose retries creating that table a
 	// second apart, which happens to queue the pods up and would hide a
 	// missing lock.)
-	first, err := fs.ReadFile(goodMigrations, "00001_create_widgets.sql")
+	first, err := fs.ReadFile(goodMigrations, "migrations/00001_create_widgets.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Migrate(t.Context(), pools[0], fstest.MapFS{
-		"00001_create_widgets.sql": {Data: first},
+	if _, err := db.Migrate(t.Context(), pools[0], fstest.MapFS{
+		"migrations/00001_create_widgets.sql": {Data: first},
 	}); err != nil {
 		t.Fatalf("first deploy: %v", err)
 	}
@@ -97,7 +99,7 @@ func TestMigrateIsSafeWhenPodsStartTogether(t *testing.T) {
 	for i := range pods {
 		wg.Go(func() {
 			<-start
-			applied[i], errs[i] = Migrate(t.Context(), pools[i], goodMigrations)
+			applied[i], errs[i] = db.Migrate(t.Context(), pools[i], goodMigrations)
 		})
 	}
 	close(start)
@@ -128,7 +130,7 @@ func TestMigrateRollsBackAFailingMigration(t *testing.T) {
 	pool := openTestDB(t, startPostgres(t))
 	ctx := t.Context()
 
-	applied, err := Migrate(ctx, pool, brokenMigrations)
+	applied, err := db.Migrate(ctx, pool, brokenMigrations)
 	if err == nil {
 		t.Fatal("Migrate succeeded, want the error from 00002_half_broken.sql")
 	}
@@ -156,7 +158,20 @@ func TestMigrateNeedsAnEmptyOrMigratedDatabase(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), "CREATE TABLE unrelated (id int)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Migrate(t.Context(), pool, goodMigrations); err != nil {
+	if _, err := db.Migrate(t.Context(), pool, goodMigrations); err != nil {
 		t.Fatalf("Migrate: %v", err)
+	}
+}
+
+func TestMigrateOnlyReadsTheMigrationsFolder(t *testing.T) {
+	// Files at the root are ignored, so a service that embedded the wrong
+	// pattern gets an error at startup instead of an unmigrated database.
+	pool := openTestDB(t, startPostgres(t))
+	first, err := fs.ReadFile(goodMigrations, "migrations/00001_create_widgets.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(t.Context(), pool, fstest.MapFS{"00001_create_widgets.sql": {Data: first}}); err == nil {
+		t.Fatal("Migrate found migrations outside migrations/, want an error")
 	}
 }

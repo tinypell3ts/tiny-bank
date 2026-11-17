@@ -3,7 +3,6 @@
 package account
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -12,29 +11,15 @@ import (
 
 	"github.com/monzo/terrors"
 
-	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
-// newTestStore starts a throwaway Postgres, applies the service's real
-// migrations, and returns a Store on it.
+// newTestStore returns a Store on a throwaway Postgres with the service's
+// real migrations applied.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	// Start Postgres first: pulling the image can be slow, and shouldn't use up
-	// the deadline for connecting and migrating.
-	url := dbtest.StartPostgres(t, "s3cret")
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	pool, err := db.Open(ctx, url)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := db.Migrate(ctx, pool, Migrations()); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return NewStore(pool)
+	return NewStore(dbtest.Migrated(t, Migrations()))
 }
 
 func TestStoreCreateThenGet(t *testing.T) {

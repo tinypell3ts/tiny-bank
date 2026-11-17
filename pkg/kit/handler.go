@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/monzo/terrors"
@@ -30,11 +31,22 @@ import (
 //     answer 499 if the caller has already gone
 //   - recover: a panic becomes a 500 instead of crashing the process
 //
+// Handler also adds the probes every service must have to the router, so a
+// service can't forget them: GET /healthz (liveness, see health) and GET
+// /readyz (readiness, see readyz), which depends on ready and on check, the
+// dependency the service can't work without (its database pool's Ping), or
+// nil if it has none. A service doesn't add these routes itself.
+//
 // GET /metrics is served next to the router, outside the filters, so
 // Prometheus scrapes aren't counted as traffic. Every request body is capped
 // at MaxBodyBytes with http.MaxBytesReader, which also tells net/http to
 // close the connection rather than read the rest of a huge body.
-func Handler(logger *slog.Logger, reg *prometheus.Registry, router *typhon.Router) http.Handler {
+func Handler(logger *slog.Logger, reg *prometheus.Registry, router *typhon.Router,
+	ready *atomic.Bool, check func(context.Context) error,
+) http.Handler {
+	router.GET("/healthz", health)
+	router.GET("/readyz", readyz(ready, check))
+
 	metrics := obs.NewHTTPMetrics(reg)
 	svc := router.Serve().
 		Filter(recoverFilter(logger)).
@@ -50,11 +62,11 @@ func Handler(logger *slog.Logger, reg *prometheus.Registry, router *typhon.Route
 	return mux
 }
 
-// Health is the liveness check, served at /healthz: "the process is alive".
+// health is the liveness check, served at /healthz: "the process is alive".
 // It never checks dependencies such as the database. If it fails, Kubernetes
 // restarts the pod, and restarting every pod because a dependency blinked
 // makes things worse.
-func Health(req typhon.Request) typhon.Response {
+func health(req typhon.Request) typhon.Response {
 	return req.Response(map[string]string{"status": "ok"})
 }
 

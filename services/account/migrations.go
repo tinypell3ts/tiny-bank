@@ -12,10 +12,6 @@ import (
 var migrationFiles embed.FS
 
 // Migrations returns the service's goose migrations, ready for db.Migrate.
-func Migrations() fs.FS {
-	sub, err := fs.Sub(migrationFiles, "migrations")
-	if err != nil {
-		panic(err) // can't happen: "migrations" is embedded above, so a failure is a build bug
-	}
-	return sub
-}
+// It's a function, not an exported variable, so no other package can swap
+// them out.
+func Migrations() fs.FS { return migrationFiles }

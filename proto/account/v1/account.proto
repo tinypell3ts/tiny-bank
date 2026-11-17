@@ -3,9 +3,9 @@ syntax = "proto3";
 // The account service's API: opening accounts and looking them up.
 //
 // It's internal, called by other services, which name the customer an
-// account is for. Requests and responses are JSON, using these field names
-// (customer_id). Binary protobuf arrives with the first service-to-service
-// client, in Phase 7.
+// account is for. Requests are JSON, using these field names (customer_id).
+// Responses are JSON too, or binary protobuf for a caller that sends
+// Accept: application/protobuf, as other services do through kit.Get.
 //
 //   POST /accounts      CreateAccountRequest -> Account (201, Location header)
 //   GET  /accounts/:id  -> Account

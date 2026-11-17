@@ -10,10 +10,10 @@
 //   - GET /metrics serves the RED metrics, labelled by route pattern, never by
 //     raw path, and doesn't count its own scrapes
 //
-// A service runs it from a test, with a handler built the way main builds it:
+// A service runs it from a test on its routes, with ConformanceOf:
 //
 //	func TestConformance(t *testing.T) {
-//		kittest.Conformance(t, func() http.Handler { return newHandler(…) })
+//		kittest.ConformanceOf(t, routes)
 //	}
 //
 // Each check gets a fresh handler, so their metrics don't mix. The handler
@@ -27,12 +27,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/monzo/typhon"
+
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // Conformance runs every check against handlers from newHandler, each as its
@@ -174,4 +179,22 @@ func serve(h http.Handler, method, path string, header http.Header) *httptest.Re
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// ConformanceOf runs Conformance on a service's routes behind kit.Handler,
+// ready, with its dependency faked as up: the handler the service really runs,
+// since kit.Handler adds the probes and db.Run builds it the same way.
+//
+//	func TestConformance(t *testing.T) {
+//		kittest.ConformanceOf(t, func(r *typhon.Router) { _ = routes(r, db.Deps{}) })
+//	}
+func ConformanceOf(t *testing.T, routes func(router *typhon.Router)) {
+	t.Helper()
+	Conformance(t, func() http.Handler {
+		router := typhon.Router{}
+		routes(&router)
+		var ready atomic.Bool
+		ready.Store(true)
+		return kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, &ready, nil)
+	})
 }

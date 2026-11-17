@@ -28,19 +28,29 @@ const connectTimeout = 5 * time.Second
 // Errors are safe to log: pgx replaces the password with "xxxxx", and
 // TestOpenFailsWithoutLeakingThePassword makes sure it stays that way.
 func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
+	pool, err := newPool(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	// The pool connects lazily, so check now that the database is really there.
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	return pool, nil
+}
+
+// newPool builds a pool for url without connecting: pgx opens connections the
+// first time they're needed. A malformed URL fails here; an unreachable
+// database doesn't.
+func newPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("open database: invalid DATABASE_URL: %w", err)
 	}
 	cfg.ConnConfig.ConnectTimeout = connectTimeout
-
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	// NewWithConfig connects lazily, so check now that the database is really there.
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	return pool, nil

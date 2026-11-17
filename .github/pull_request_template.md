@@ -19,6 +19,13 @@ Title format: Conventional Commits, e.g. "feat(ledger): record money moving betw
 
 <!-- What changes for the people using tiny-bank (or for developers, if nothing user-facing). Any risks? -->
 
+## How to review
+
+<!-- Optional: for PRs with several commits, or more than a handful of files.
+For reviewers: the order to read it in, what needs a close look (anything
+touching money, access or shared code), and what's safe to skip
+(generated *.pb.go, moved files). A table per commit works well. -->
+
 ## How to check it works
 
 <!-- The exact commands or steps to see it working. -->

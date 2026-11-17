@@ -3,107 +3,23 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"io"
-	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
-// syncBuffer collects the service's log lines; run writes from its own goroutine.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  strings.Builder
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
-}
-
-// freePort asks the OS for an unused port, so the test server doesn't clash.
-func freePort(t *testing.T) string {
+// startService runs the real service against url and returns its base URL
+// and logs. It stops when the test ends.
+func startService(t *testing.T, url string) (base string, logs *kittest.Logs) {
 	t.Helper()
-	var lc net.ListenConfig
-	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = ln.Close() }()
-	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	return port
-}
-
-// startService runs the real service against url and returns its base URL.
-// It stops when the test ends.
-func startService(t *testing.T, url string) (base string, logs *syncBuffer) {
-	t.Helper()
-	port := freePort(t)
-	env := map[string]string{"DATABASE_URL": url, "PORT": port}
-	logs = &syncBuffer{}
-
-	// run's result is stored once and done is closed after it, so both the
-	// readiness loop and cleanup can wait on done without taking the result
-	// from each other (a channel send can only be received once).
-	ctx, cancel := context.WithCancel(context.Background())
-	var runErr error
-	done := make(chan struct{})
-	go func() {
-		runErr = run(ctx, func(k string) string { return env[k] }, logs)
-		close(done)
-	}()
-	t.Cleanup(func() {
-		cancel() // what SIGTERM does in main
-		<-done
-		if runErr != nil {
-			t.Errorf("run: %v\nlogs:\n%s", runErr, logs)
-		}
-	})
-
-	base = "http://127.0.0.1:" + port
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if status, _ := get(t, base+"/readyz"); status == http.StatusOK {
-			return base, logs
-		}
-		select {
-		case <-done:
-			t.Fatalf("service exited early: %v\nlogs:\n%s", runErr, logs)
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	t.Fatalf("service never became ready\nlogs:\n%s", logs)
-	return "", nil
-}
-
-func get(t *testing.T, url string) (int, string) {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, ""
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, string(body)
+	return kittest.Start(t, run, map[string]string{"DATABASE_URL": url})
 }
 
 func TestServiceMigratesThenServes(t *testing.T) {
@@ -191,15 +107,15 @@ func TestReadyzFailsWhenTheDatabaseGoesAway(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, body := get(t, base+"/readyz")
+	status, body := kittest.Get(t, base+"/readyz")
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("readyz = %d %s, want 503 while the database is unreachable", status, body)
 	}
 	var got map[string]string
-	if err := json.Unmarshal([]byte(body), &got); err != nil || got["status"] != "database unavailable" {
-		t.Errorf("readyz body = %s, want status database unavailable", body)
+	if err := json.Unmarshal([]byte(body), &got); err != nil || got["status"] != "dependency unavailable" {
+		t.Errorf("readyz body = %s, want status dependency unavailable", body)
 	}
-	if status, _ := get(t, base+"/healthz"); status != http.StatusOK {
+	if status, _ := kittest.Get(t, base+"/healthz"); status != http.StatusOK {
 		t.Errorf("healthz = %d, want 200: liveness must not depend on the database", status)
 	}
 
@@ -209,7 +125,7 @@ func TestReadyzFailsWhenTheDatabaseGoesAway(t *testing.T) {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if status, _ := get(t, base+"/readyz"); status == http.StatusOK {
+		if status, _ := kittest.Get(t, base+"/readyz"); status == http.StatusOK {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -247,17 +163,17 @@ func TestAccountAPIEndToEnd(t *testing.T) {
 	location := resp.Header.Get("Location")
 
 	// Follow Location back to the same account, now read from Postgres.
-	status, got := get(t, base+location)
+	status, got := kittest.Get(t, base+location)
 	if status != http.StatusOK || !strings.Contains(got, `"holder_name":"Ada Lovelace"`) || !strings.Contains(got, created.ID) {
 		t.Fatalf("GET %s = %d %s, want the account just created", location, status, got)
 	}
 
-	if status, _ := get(t, base+"/accounts/not-a-uuid"); status != http.StatusNotFound {
+	if status, _ := kittest.Get(t, base+"/accounts/not-a-uuid"); status != http.StatusNotFound {
 		t.Errorf("GET /accounts/not-a-uuid = %d, want 404", status)
 	}
 
 	// Metrics label the route pattern, never the account ID (cardinality).
-	_, metrics := get(t, base+"/metrics")
+	_, metrics := kittest.Get(t, base+"/metrics")
 	if !strings.Contains(metrics, `http_route="/accounts/:id"`) || !strings.Contains(metrics, `http_route="/accounts"`) {
 		t.Error("/metrics should count requests by route pattern")
 	}

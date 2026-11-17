@@ -10,6 +10,8 @@ import (
 	"net"
 	"sync/atomic"
 
+	"github.com/monzo/typhon"
+
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
@@ -30,6 +32,9 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 		return fmt.Errorf("listen: %w", err)
 	}
 
+	router := typhon.Router{}
+	routes(&router)
 	var ready atomic.Bool
-	return kit.Serve(ctx, ln, newHandler(logger, &ready, obs.NewRegistry()), &ready, logger, cfg.ShutdownTimeout)
+	h := kit.Handler(logger, obs.NewRegistry(), &router, &ready, nil) // hello has no dependencies
+	return kit.Serve(ctx, ln, h, &ready, logger, cfg.ShutdownTimeout)
 }

@@ -4,6 +4,11 @@
 .claude
 docs
 scripts
+# Helm values, dashboards and the kind config: editing a dashboard must not
+# rebuild and restart every service (which also resets their metrics).
+deploy
+# make proto-check's scratch copy of the generated code.
+build
 bin
 dist
 *.md

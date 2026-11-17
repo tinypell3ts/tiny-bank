@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/monzo/typhon"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/sourcecontextpb"
 	"google.golang.org/protobuf/types/known/typepb"
 
@@ -19,7 +20,7 @@ func respond(t *testing.T, h typhon.Service) *httptest.ResponseRecorder {
 	t.Helper()
 	router := typhon.Router{}
 	router.GET("/thing", h)
-	handler := Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router)
+	handler := Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, readyNow(), nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/thing", nil))
 	return rec
@@ -67,5 +68,32 @@ func TestRespondErrorIsAServerErrorNotAnEmpty201(t *testing.T) {
 	})
 	if rec.Code != http.StatusInternalServerError || rec.Header().Get("Location") != "" {
 		t.Errorf("status %d, Location %q; want a 500 with no Location", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestRespondSendsBinaryWhenAskedFor(t *testing.T) {
+	router := typhon.Router{}
+	router.GET("/thing", func(req typhon.Request) typhon.Response {
+		return Respond(req, &typepb.Type{Name: "Ada"}, http.StatusOK)
+	})
+	handler := Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, readyNow(), nil)
+
+	for accept, wantType := range map[string]string{"": "application/json", "application/protobuf": "application/protobuf"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/thing", nil)
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Header().Get("Content-Type") != wantType || rec.Header().Get("Vary") != "Accept" {
+			t.Errorf("Accept %q: Content-Type %q, Vary %q; want %s, Accept", accept, rec.Header().Get("Content-Type"), rec.Header().Get("Vary"), wantType)
+			continue
+		}
+		if wantType == "application/protobuf" {
+			var got typepb.Type
+			if err := proto.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.GetName() != "Ada" {
+				t.Errorf("binary body = %v, %v; want Ada", &got, err)
+			}
+		}
 	}
 }

@@ -14,7 +14,7 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | 5 | Account service (HTTP/JSON) on k8s, its `accounts` table and `/readyz` database check | [05-account-service](05-account-service.md) |
 | 5.5 | `pkg/kit` on Typhon and terrors: services as `typhon.Service`, shared filters, `kittest` | [05-5-typhon-kit](05-5-typhon-kit.md) |
 | 6 | Protobuf contracts (`proto/`, `buf` lint, breaking and drift checks), served as JSON | [06-protobuf-contracts](06-protobuf-contracts.md) |
-| 7 | Ledger service (double-entry), and the first service-to-service call: the Typhon account client and binary protobuf | |
+| 7 | Ledger service (double-entry journals, row locks, idempotency keys, an append-only audit trail), and the first service-to-service call (`kit.Get`, binary protobuf) | [07-ledger](07-ledger.md) |
 | 8 | Transaction service + tracing | |
 | 9 | Kafka via Strimzi | |
 | 10 | Transactional outbox | |

@@ -3,11 +3,10 @@
 // the server with graceful shutdown, and Handler, which puts a service's
 // Typhon router behind the filters every service shares: request IDs, access
 // logs, metrics, safe errors and panic recovery. Decode reads a request
-// body into a protobuf message strictly, Respond writes one back as JSON, and
-// Health is the liveness check.
+// body into a protobuf message strictly, and Respond writes one back as JSON.
+// Handler also serves the probes every service needs: /healthz and /readyz.
 //
-// A service wires these together with its own routes, readiness check and
-// startup steps. Anything that differs between services stays in the service.
+// A service wires these together with its own routes and startup steps. Anything that differs between services stays in the service.
 // Package kittest checks that a service is wired up correctly.
 package kit
 
