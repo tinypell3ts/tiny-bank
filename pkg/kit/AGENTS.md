@@ -19,6 +19,7 @@ pkg/kit/
 ├── respond.go    # Respond, RespondCreated: a proto message as JSON with the proto field names, or binary if the caller asks
 ├── client.go     # Get and Post: call another service, binary protobuf, request ID passed on, read leniently, on a pool of at most 100 connections per service
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
+├── idempotency.go # CheckIdempotencyKey: the one set of rules for a caller's idempotency key, shared by every service that takes one
 ├── uuid.go       # ParseUUID: caller text to a UUID, canonical form only, so one thing has one URL
 └── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start and Get run a real service in integration tests
 ```

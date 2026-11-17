@@ -11,13 +11,13 @@ package ledger
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"time"
 	"uuid"
 
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -75,18 +75,12 @@ const (
 	// maxEntries bounds how many accounts one journal locks. A transfer needs
 	// two; a few more covers fees.
 	maxEntries = 10
-	// maxKeyLen bounds the idempotency key. A UUID is 36 characters.
-	maxKeyLen = 100
 	// maxAmount bounds one entry: 10^12 minor units, £10 billion. Without a
 	// bound, a few huge journals could take a balance near the int64 limit,
 	// after which every post to that account would overflow. With it, a
 	// balance needs millions of maximum-size journals to get there.
 	maxAmount = 1_000_000_000_000
 )
-
-// keyPattern is what an idempotency key may contain: letters, digits and a
-// few separators, so a key is safe to log.
-var keyPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
 // NewJournal is a request to move money.
 type NewJournal struct {
@@ -104,13 +98,8 @@ func invalid(field, message string) error { return terrors.BadRequest(field, mes
 // so a retry compares equal to the journal it repeats, and an account listed
 // twice is next to itself.
 func (j NewJournal) Validate() (NewJournal, error) {
-	switch n := len(j.IdempotencyKey); {
-	case n == 0:
-		return NewJournal{}, invalid("idempotency_key", "idempotency key is required")
-	case n > maxKeyLen:
-		return NewJournal{}, invalid("idempotency_key", fmt.Sprintf("idempotency key must be at most %d characters", maxKeyLen))
-	case !keyPattern.MatchString(j.IdempotencyKey):
-		return NewJournal{}, invalid("idempotency_key", "idempotency key may only contain letters, digits and . _ : -")
+	if err := kit.CheckIdempotencyKey(j.IdempotencyKey); err != nil {
+		return NewJournal{}, err
 	}
 	switch n := len(j.Entries); {
 	case n < 2:

@@ -9,6 +9,7 @@ import (
 
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -31,10 +32,10 @@ func TestValidate(t *testing.T) {
 		{"a transfer", "k1", transfer, ""},
 		{"a fee: three entries", "k1", []Entry{{alice, gbp(-550)}, {bob, gbp(500)}, {carol, gbp(50)}}, ""},
 		{"key with every allowed character", "Aa0._:-", transfer, ""},
-		{"key at the limit", strings.Repeat("k", maxKeyLen), transfer, ""},
+		{"key at the limit", strings.Repeat("k", kit.MaxIdempotencyKeyLen), transfer, ""},
 
 		{"no key", "", transfer, "bad_request.idempotency_key"},
-		{"key too long", strings.Repeat("k", maxKeyLen+1), transfer, "bad_request.idempotency_key"},
+		{"key too long", strings.Repeat("k", kit.MaxIdempotencyKeyLen+1), transfer, "bad_request.idempotency_key"},
 		{"key with a space", "k 1", transfer, "bad_request.idempotency_key"},
 		{"key with a newline", "k\n1", transfer, "bad_request.idempotency_key"},
 
