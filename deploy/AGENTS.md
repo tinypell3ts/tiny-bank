@@ -49,7 +49,7 @@ When you add a template or value, check it renders for every service: `make char
 
 ## Adding a service
 
-1. `cmd/<name>/main.go`, built on the same foundations as `cmd/hello`.
+1. `cmd/<name>/main.go`: `var run = db.Run("<name>", <service>.Migrations(), routes)` and `kit.Main("<name>", run)` for a service with a database (see `cmd/ledger`), or like `cmd/hello` without one.
 2. `deploy/values/<name>.yaml` with `name` and `image.repository: tiny-bank/<name>`. Add `database: {enabled: true}` if it stores data.
 3. One line in the `Tiltfile`: `go_service('<name>', port=<next free localhost port>)`. If its values file turns on `database.enabled`, `go_service` also adds a `<name>-db` row with the database's pods and logs. The Tilt dashboard groups each service's rows under its name, so the account group shows `account` and `account-db` together.
 4. `make chart-check`, then `make dev`.
