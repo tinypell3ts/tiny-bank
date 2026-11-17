@@ -10,3 +10,12 @@ config:
   # Where the account service is: its Service's name, on port 80. The ledger
   # checks every customer account with it before moving money.
   ACCOUNT_URL: http://account
+# Sized from a load test (make load-journals): at about 2,000 journals a
+# second the ledger peaked at 58 MB, against the chart's default 64 MiB
+# limit, and was OOMKilled when more requests ran at once. 256 MiB gives
+# room for bursts; GOMEMLIMIT (set by the chart) keeps Go under it.
+resources:
+  requests:
+    memory: 64Mi
+  limits:
+    memory: 256Mi

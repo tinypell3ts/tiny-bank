@@ -47,6 +47,10 @@ database:
     limits:
       memory: 512Mi # no CPU limit, as for the app
 
+# A small default that fits a service with little traffic, like hello. A
+# service under real load sets its own, sized from a load test (see
+# deploy/values/ledger.yaml). The chart passes the memory limit to Go as
+# GOMEMLIMIT, so the garbage collector works to stay under it.
 resources:
   requests:
     cpu: 50m # 5% of one CPU: what the scheduler reserves
