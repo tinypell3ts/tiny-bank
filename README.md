@@ -68,6 +68,15 @@ curl localhost:8082/accounts/<account id>/balance
 
 Send the same request again and you get the same journal back with a 200: the idempotency key makes a retry safe. The ledger checks each account with the account service first, so use the ID of an account you opened above.
 
+Callers usually go through the transaction service, which saves each request as a transfer and sees it through to the ledger, retrying if the ledger is slow or down. Move £3 from that account to a second one you've opened:
+
+```bash
+curl -i -X POST localhost:8083/transfers -H 'Content-Type: application/json' \
+  -d '{"idempotency_key":"t1","from_account_id":"<account id>","to_account_id":"<other account id>","currency":"GBP","amount":300}'
+```
+
+A 201 means it finished in the request (`state` completed, or failed with a `failure_reason`), and a 202 that it's still pending: `GET localhost:8083/transfers/<id>` shows when it's done. `POST /deposits` takes an `account_id` and moves money in from the funding account.
+
 Without Tilt, for a one-off deploy:
 
 ```bash
