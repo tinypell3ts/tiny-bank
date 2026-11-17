@@ -18,6 +18,7 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | 8 | Transaction service + tracing | |
 | 9 | Kafka via Strimzi | |
 | 10 | Transactional outbox | |
+| 10.5 | Hot accounts: make one very busy account (the funding account, a big merchant) fast, measured with the load tool: credits without a check, a single writer per account through Kafka, sharded accounts | |
 | 11 | Notification service | |
 | 11.5 | Customer service + onboarding: a customer exists (and is verified) before any account is opened for them | |
 | 12 | Edge gateway + ingress: sign-in, and the customer ID comes from the signed-in caller, never the request body | |
