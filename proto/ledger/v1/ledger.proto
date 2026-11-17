@@ -30,9 +30,12 @@ syntax = "proto3";
 //     no record of it yet (on GET .../balance)
 //   not_found.journal
 //
-// A precondition_failed answer is final: retrying the same request gets the
-// same answer until something changes (the account receives money). If the
-// account service can't be reached, the answer is a 500 and no money moves.
+// An idempotency key gets one final answer. A refusal (bad_request.currency,
+// precondition_failed, not_found.account) is kept against the key like a
+// journal: retrying the same request gets the same refusal, even once it
+// would go through, so use a new key to try again. If the account service
+// can't be reached, the answer is a 500, no money moves, and nothing is kept,
+// so the same key can be retried.
 package ledger.v1;
 
 import "google/protobuf/timestamp.proto";

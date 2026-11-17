@@ -365,11 +365,10 @@ func (l *blockingLedger) Post(ctx context.Context, t Transfer) (uuid.UUID, error
 	return l.fakeLedger.Post(ctx, t)
 }
 
-// TestTwoAttemptsNeverPostAtOnce is the race the lease stops: request A's
-// post is refused (the ledger keeps no key for a refusal), a deposit lands,
-// and a retry B posts the money. If both posted, A could save "failed" for a
-// transfer whose money moved. With one attempt at a time, B doesn't post
-// while A holds the transfer.
+// TestTwoAttemptsNeverPostAtOnce: while request A holds the transfer, a
+// retry B doesn't post it too. (If both did, the ledger would still give them
+// one answer, as it keeps refusals against the key; the lease saves the
+// duplicate post.)
 func TestTwoAttemptsNeverPostAtOnce(t *testing.T) {
 	ledger := &blockingLedger{
 		fakeLedger: &fakeLedger{answers: []error{errNoFunds, nil}, journal: uuid.New()},
