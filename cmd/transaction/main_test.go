@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,10 +16,24 @@ import (
 func TestConformance(t *testing.T) {
 	env := map[string]string{"LEDGER_URL": "http://ledger"}
 	kittest.ConformanceOf(t, func(r *typhon.Router) {
-		if err := routes(r, db.Deps{Getenv: func(k string) string { return env[k] }}); err != nil {
+		deps := db.Deps{Getenv: func(k string) string { return env[k] }, Background: func(func(context.Context)) {}}
+		if err := routes(r, deps); err != nil {
 			t.Fatal(err)
 		}
 	})
+}
+
+// TestRoutesStartTheFinisher: without it, a transfer the ledger didn't answer
+// in time would stay pending for ever.
+func TestRoutesStartTheFinisher(t *testing.T) {
+	started := 0
+	deps := db.Deps{
+		Getenv:     func(string) string { return "http://ledger" },
+		Background: func(func(context.Context)) { started++ },
+	}
+	if err := routes(&typhon.Router{}, deps); err != nil || started != 1 {
+		t.Fatalf("routes = %v, %d background jobs; want the finisher started once", err, started)
+	}
 }
 
 func TestRoutesNeedsALedgerURL(t *testing.T) {

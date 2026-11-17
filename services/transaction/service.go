@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -23,6 +24,13 @@ const (
 	backoffMax  = time.Second
 	// finishTimeout bounds saving the ledger's answer once it's back.
 	finishTimeout = 5 * time.Second
+
+	// The finisher looks for due transfers every finisherInterval, claiming
+	// finisherBatch at a time, each for claimLease: longer than one attempt
+	// takes, so a claimed transfer is never tried twice at once.
+	finisherInterval = time.Second
+	finisherBatch    = 20
+	claimLease       = 30 * time.Second
 )
 
 // Service is the transaction service: the Store, plus posting each pending
@@ -49,17 +57,62 @@ func (s *Service) Create(ctx context.Context, req NewTransfer) (Transfer, bool, 
 	if err != nil || t.State != StatePending {
 		return t, created, err
 	}
-	t, err = s.attempt(ctx, t)
+	t, err = s.attempt(ctx, t, attemptsPerRequest)
 	return t, created, err
 }
 
-// attempt posts pending transfer t to the ledger, up to attemptsPerRequest
-// times, and records the outcome. Before each try it records the attempt and
+// RunFinisher finishes the transfers requests left pending, until ctx ends:
+// every finisherInterval it calls FinishDue. It's how a transfer gets
+// completed or failed after the ledger was down, slow, or this service died
+// mid-request. Every pod runs one; ClaimDue keeps them off each other's
+// transfers.
+func (s *Service) RunFinisher(ctx context.Context, logger *slog.Logger) {
+	ticker := time.NewTicker(finisherInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if _, err := s.FinishDue(ctx, logger); err != nil && ctx.Err() == nil {
+			logger.Error("finish due transfers", "error", err)
+		}
+	}
+}
+
+// FinishDue tries each due pending transfer once more, a batch at a time,
+// until none are due or ctx ends, and returns how many it tried. A transfer
+// the ledger still doesn't answer stays pending, due again later
+// (nextAttemptAfter). One transfer's error is logged and doesn't stop the
+// others.
+func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, error) {
+	tried := 0
+	for ctx.Err() == nil {
+		due, err := s.ClaimDue(ctx, finisherBatch, claimLease)
+		if err != nil {
+			return tried, err
+		}
+		for _, t := range due {
+			if _, err := s.attempt(ctx, t, 1); err != nil {
+				logger.Error("finish transfer", "transfer_id", t.ID, "error", err)
+			}
+		}
+		tried += len(due)
+		if len(due) < finisherBatch {
+			break
+		}
+	}
+	return tried, nil
+}
+
+// attempt posts pending transfer t to the ledger, up to tries times, and
+// records the outcome. Before each try it records the attempt and
 // when to try again (nextAttemptAfter), so if this service dies mid-call the
 // transfer is still found and finished later. Every try uses the transfer's
 // own ID as the ledger's idempotency key, so the money moves at most once.
-func (s *Service) attempt(ctx context.Context, t Transfer) (Transfer, error) {
-	for try := range attemptsPerRequest {
+func (s *Service) attempt(ctx context.Context, t Transfer, tries int) (Transfer, error) {
+	for try := range tries {
 		var err error
 		if t, err = s.StartAttempt(ctx, t.ID, nextAttemptAfter(t.Attempts+1)); err != nil {
 			return t, fmt.Errorf("start attempt: %w", err)
@@ -81,7 +134,7 @@ func (s *Service) attempt(ctx context.Context, t Transfer) (Transfer, error) {
 
 		// We can't tell whether the money moved, so try again, with the same
 		// key, if there's time. Otherwise it stays pending for later.
-		if try == attemptsPerRequest-1 || !sleep(ctx, backoff(try)) {
+		if try == tries-1 || !sleep(ctx, backoff(try)) {
 			break
 		}
 	}

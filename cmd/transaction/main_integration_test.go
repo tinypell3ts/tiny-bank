@@ -59,7 +59,7 @@ func TestTransactionAPIEndToEnd(t *testing.T) {
 		ledger.RegisterRoutes(r, ledger.NewService(store, ledger.AccountService{BaseURL: accountURL}, prometheus.NewRegistry()))
 	})
 	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": dbtest.StartPostgres(t, "s3cret"), "LEDGER_URL": ledgerURL})
-	if !strings.Contains(logs.String(), `"applied":["00001_create_transfers.sql"]`) {
+	if !strings.Contains(logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
 

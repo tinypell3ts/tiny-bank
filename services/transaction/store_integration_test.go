@@ -4,6 +4,7 @@ package transaction
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -188,6 +189,97 @@ func TestTheTableKeepsTheRules(t *testing.T) {
 	} {
 		if _, err := s.pool.Exec(t.Context(), sql); err == nil {
 			t.Errorf("accepted %s", strings.Fields(sql)[0]+" … "+sql[len(sql)-40:])
+		}
+	}
+}
+
+// makeDue sets transfer id due now, as if its next attempt time had passed.
+func makeDue(t *testing.T, s *Store, id uuid.UUID) {
+	t.Helper()
+	if _, err := s.pool.Exec(t.Context(), `UPDATE transfers SET next_attempt_at = now() - interval '1 second' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimDueClaimsOnlyDuePendingTransfers(t *testing.T) {
+	s := newTestStore(t)
+	due := mustCreate(t, s, transferReq("due", alice, bob, 1))
+	notYet := mustCreate(t, s, transferReq("not-yet", alice, bob, 2))
+	if _, err := s.StartAttempt(t.Context(), notYet.ID, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	done := mustCreate(t, s, transferReq("done", alice, bob, 3))
+	makeDue(t, s, done.ID)
+	if _, err := s.Complete(t.Context(), done.ID, uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	before := time.Now()
+	claimed, err := s.ClaimDue(t.Context(), 10, time.Minute)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != due.ID {
+		t.Fatalf("ClaimDue = %v, %v; want only the due pending transfer", claimed, err)
+	}
+	if !claimed[0].NextAttemptAt.After(before.Add(50 * time.Second)) {
+		t.Errorf("next attempt %v, want it pushed a lease ahead", claimed[0].NextAttemptAt)
+	}
+	if again, err := s.ClaimDue(t.Context(), 10, time.Minute); err != nil || len(again) != 0 {
+		t.Errorf("second ClaimDue = %v, %v; want nothing while the claim lasts", again, err)
+	}
+}
+
+func TestClaimDueTakesTheOldestFirstUpToTheLimit(t *testing.T) {
+	s := newTestStore(t)
+	oldest := mustCreate(t, s, transferReq("t1", alice, bob, 1))
+	mustCreate(t, s, transferReq("t2", alice, bob, 2))
+	claimed, err := s.ClaimDue(t.Context(), 1, time.Minute)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != oldest.ID {
+		t.Fatalf("ClaimDue = %v, %v; want just the oldest", claimed, err)
+	}
+}
+
+// TestFinishersNeverClaimTheSameTransfer: two pods' finishers claiming at the
+// same moment get different transfers (SKIP LOCKED), so none is tried twice
+// at once.
+func TestFinishersNeverClaimTheSameTransfer(t *testing.T) {
+	s := newTestStore(t)
+	const n = 40
+	for i := range n {
+		mustCreate(t, s, transferReq("t"+strconv.Itoa(i), alice, bob, int64(i+1)))
+	}
+	var (
+		mu    sync.Mutex
+		seen  = map[uuid.UUID]int{}
+		wg    sync.WaitGroup
+		start = make(chan struct{})
+	)
+	for range 4 {
+		wg.Go(func() {
+			<-start
+			for {
+				claimed, err := s.ClaimDue(t.Context(), 3, time.Minute)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if len(claimed) == 0 {
+					return
+				}
+				mu.Lock()
+				for _, c := range claimed {
+					seen[c.ID]++
+				}
+				mu.Unlock()
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if len(seen) != n {
+		t.Errorf("claimed %d transfers, want all %d", len(seen), n)
+	}
+	for id, times := range seen {
+		if times != 1 {
+			t.Errorf("transfer %s claimed %d times, want once", id, times)
 		}
 	}
 }

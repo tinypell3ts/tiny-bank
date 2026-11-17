@@ -5,6 +5,8 @@ package transaction
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -159,5 +161,126 @@ func TestBackoffStaysUnderItsCeiling(t *testing.T) {
 	}
 	if nextAttemptAfter(1) != 10*time.Second || nextAttemptAfter(100) != 5*time.Minute {
 		t.Errorf("nextAttemptAfter = %v, %v; want 10s, then capped at 5m", nextAttemptAfter(1), nextAttemptAfter(100))
+	}
+}
+
+var discard = slog.New(slog.DiscardHandler)
+
+// leftPending creates a transfer the ledger couldn't be reached for, so it's
+// pending, then makes it due, as if its next attempt time had come.
+func leftPending(t *testing.T, s *Service, key string) Transfer {
+	t.Helper()
+	tr, _, err := s.Create(t.Context(), transferReq(key, alice, bob, 300))
+	if err != nil || tr.State != StatePending {
+		t.Fatalf("Create = %+v, %v; want it left pending", tr, err)
+	}
+	makeDue(t, s.Store, tr.ID)
+	return tr
+}
+
+func TestFinishDueFinishesWhatRequestsLeftPending(t *testing.T) {
+	tests := []struct {
+		name        string
+		finisherGot error
+		wantState   State
+	}{
+		{"the ledger posts it", nil, StateCompleted},
+		{"the ledger refuses it", errNoFunds, StateFailed},
+		{"the ledger is still down", errLedgerDown, StatePending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			answers := make([]error, attemptsPerRequest, attemptsPerRequest+1)
+			for i := range answers {
+				answers[i] = errUnreachable
+			}
+			s, ledger := newTestService(t, append(answers, tt.finisherGot)...)
+			tr := leftPending(t, s, "t1")
+
+			tried, err := s.FinishDue(t.Context(), discard)
+			if err != nil || tried != 1 || ledger.calls() != attemptsPerRequest+1 {
+				t.Fatalf("FinishDue = %d, %v after %d calls; want 1 tried, once", tried, err, ledger.calls())
+			}
+			got, _ := s.Get(t.Context(), tr.ID)
+			if got.State != tt.wantState || got.Attempts != attemptsPerRequest+1 {
+				t.Errorf("transfer = %s after %d attempts, want %s after %d", got.State, got.Attempts, tt.wantState, attemptsPerRequest+1)
+			}
+			if tt.wantState == StatePending && !got.NextAttemptAt.After(time.Now()) {
+				t.Error("still pending but not scheduled again")
+			}
+		})
+	}
+}
+
+// TestALostReplyIsReplayedWithTheSameKey: the ledger posted the journal but
+// its answer never arrived. The finisher posts again with the transfer's own
+// ID, which the ledger answers with the journal it already posted, so the
+// money moves once and the transfer completes.
+func TestALostReplyIsReplayedWithTheSameKey(t *testing.T) {
+	s, ledger := newTestService(t, errUnreachable, errUnreachable, errUnreachable, nil)
+	tr := leftPending(t, s, "t1")
+	if _, err := s.FinishDue(t.Context(), discard); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(t.Context(), tr.ID)
+	if got.State != StateCompleted || got.JournalID != ledger.journal {
+		t.Fatalf("transfer = %+v, want completed with the ledger's journal", got)
+	}
+	for _, p := range ledger.posted {
+		if p.ID != tr.ID {
+			t.Fatal("the finisher posted with a different key: the money could move twice")
+		}
+	}
+}
+
+func TestFinishDueGoesOnPastOneTransfersError(t *testing.T) {
+	s, ledger := newTestService(t, errUnreachable, errUnreachable, errUnreachable,
+		errUnreachable, errUnreachable, errUnreachable, errKeyReusedBug, nil)
+	first := leftPending(t, s, "t1")
+	second := leftPending(t, s, "t2")
+	if tried, err := s.FinishDue(t.Context(), discard); err != nil || tried != 2 {
+		t.Fatalf("FinishDue = %d, %v; want both tried", tried, err)
+	}
+	a, _ := s.Get(t.Context(), first.ID)
+	b, _ := s.Get(t.Context(), second.ID)
+	if a.State != StatePending || b.State != StateCompleted || ledger.calls() != 8 {
+		t.Errorf("states %s, %s after %d calls; want the bug left pending and the other completed", a.State, b.State, ledger.calls())
+	}
+}
+
+func TestFinishDueWorksThroughMoreThanOneBatch(t *testing.T) {
+	s, ledger := newTestService(t, nil)
+	for i := range finisherBatch + 5 {
+		tr, _, err := s.Store.Create(t.Context(), transferReq("t"+strconv.Itoa(i), alice, bob, 300))
+		if err != nil {
+			t.Fatal(err)
+		}
+		makeDue(t, s.Store, tr.ID)
+	}
+	if tried, err := s.FinishDue(t.Context(), discard); err != nil || tried != finisherBatch+5 || ledger.calls() != finisherBatch+5 {
+		t.Errorf("FinishDue = %d, %v, %d calls; want all %d", tried, err, ledger.calls(), finisherBatch+5)
+	}
+}
+
+func TestRunFinisherFinishesThenStopsAtShutdown(t *testing.T) {
+	s, _ := newTestService(t, errUnreachable, errUnreachable, errUnreachable, nil)
+	tr := leftPending(t, s, "t1")
+	ctx, shutdown := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { s.RunFinisher(ctx, discard); close(done) }()
+
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if got, _ := s.Get(t.Context(), tr.ID); got.State == StateCompleted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the finisher never completed the transfer")
+		}
+	}
+	shutdown()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RunFinisher didn't stop at shutdown")
 	}
 }

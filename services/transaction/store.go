@@ -92,6 +92,30 @@ func (s *Store) StartAttempt(ctx context.Context, id uuid.UUID, retryAfter time.
 		id, retryAfter)
 }
 
+// ClaimDue claims up to limit pending transfers that are due to be tried
+// again, oldest first, and returns them. Claiming one pushes its
+// next_attempt_at forward by lease, so no other finisher (another pod) picks
+// it up meanwhile; FOR UPDATE SKIP LOCKED means two finishers claiming at the
+// same moment skip each other's rows instead of waiting for them, so each
+// gets a different set. If the finisher dies holding a claim, the transfer is
+// due again once the lease runs out.
+func (s *Store) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]Transfer, error) {
+	rows, err := s.pool.Query(ctx,
+		`UPDATE transfers SET next_attempt_at = now() + $2::interval, updated_at = now()
+		 WHERE id IN (SELECT id FROM transfers WHERE state = 'pending' AND next_attempt_at <= now()
+		              ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+		 RETURNING `+columns,
+		limit, lease)
+	if err != nil {
+		return nil, fmt.Errorf("claim due transfers: %w", err)
+	}
+	due, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Transfer, error) { return scanTransfer(row) })
+	if err != nil {
+		return nil, fmt.Errorf("claim due transfers: %w", err)
+	}
+	return due, nil
+}
+
 // Complete marks pending transfer id completed, posted by the ledger as
 // journal journalID. Completing it again with the same journal is fine (an
 // answer that arrived twice); anything else on a finished transfer is an

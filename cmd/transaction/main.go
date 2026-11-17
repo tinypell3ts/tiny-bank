@@ -9,6 +9,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
@@ -21,9 +23,11 @@ var run = db.Run("transaction", transaction.Migrations(), routes)
 
 func main() { kit.Main("transaction", run) }
 
-// routes is the transaction API, on the service's database. LEDGER_URL,
-// required, is where the ledger is (http://ledger on the cluster, set in
-// deploy/values/transaction.yaml): every transfer is posted to it.
+// routes is the transaction API, on the service's database, plus the
+// finisher, which runs in the background to finish what requests left
+// pending. LEDGER_URL, required, is where the ledger is (http://ledger on the
+// cluster, set in deploy/values/transaction.yaml): every transfer is posted
+// to it.
 func routes(router *typhon.Router, deps db.Deps) error {
 	ledgerURL, err := kit.ServiceURL(deps.Getenv, "LEDGER_URL")
 	if err != nil {
@@ -31,5 +35,6 @@ func routes(router *typhon.Router, deps db.Deps) error {
 	}
 	service := transaction.NewService(transaction.NewStore(deps.Pool), transaction.LedgerService{BaseURL: ledgerURL})
 	transaction.RegisterRoutes(router, service)
+	deps.Background(func(ctx context.Context) { service.RunFinisher(ctx, deps.Logger) })
 	return nil
 }
