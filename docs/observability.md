@@ -78,6 +78,8 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 
 - **Following one request across services:** `kit.Get` passes the request ID on, so the same `request_id` is in the ledger's log lines and in the account service's lines for its checks. Each journal stores the request ID that posted it, so the audit trail leads from a movement of money to the logs of the request that made it.
 
+- **Tracing:** `kit.Main` sets up OpenTelemetry for every service ([tracing.go](../pkg/obs/tracing.go), [ADR-0011](adr/0011-trace-requests-with-opentelemetry-and-jaeger.md)). With `OTEL_EXPORTER_OTLP_ENDPOINT` set (the chart sets `http://jaeger.jaeger:4318`), spans are batched and sent over OTLP/HTTP in the background, and trace context travels between services as the W3C `traceparent` header. Without it, tracing is off. Export failures are logged as warnings and never affect a request. The shared filters don't create spans yet, so nothing is sent so far.
+
 ### On the cluster
 
 `make dev` (or `make monitoring` on its own) installs [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) into the `monitoring` namespace, with settings in [deploy/monitoring/values.yaml](../deploy/monitoring/values.yaml):

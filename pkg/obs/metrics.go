@@ -1,6 +1,5 @@
-// Package obs holds the observability building blocks shared by every service.
-// For now that is Prometheus metrics for HTTP servers. Logging and tracing join
-// it in later phases, when a second service needs them.
+// Package obs holds the observability building blocks shared by every service:
+// Prometheus metrics for HTTP servers, and tracing setup (StartTracing).
 package obs
 
 import (

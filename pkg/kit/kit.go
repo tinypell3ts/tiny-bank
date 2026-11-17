@@ -19,6 +19,9 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 // Main runs a service's run function until SIGTERM or Ctrl-C, then exits:
@@ -31,20 +34,40 @@ import (
 // container's (see memoryLimitFor), so the service slows down as it nears
 // its limit instead of being killed.
 //
+// It starts tracing (obs.StartTracing: on when OTEL_EXPORTER_OTLP_ENDPOINT is
+// set) before run, and once run returns, sends the spans still buffered,
+// waiting at most tracingFlushTimeout. A failed flush loses the last few
+// spans, never the exit code.
+//
 // run takes its dependencies (environment and log output) as arguments, so
 // tests can call it directly with a fake environment.
 func Main(name string, run func(ctx context.Context, getenv func(string) string, out io.Writer) error) {
 	if limit, ok := memoryLimitFor(os.Getenv); ok {
 		debug.SetMemoryLimit(limit)
 	}
+	flushTracing, err := obs.StartTracing(name, os.Getenv, NewLogger(os.Stdout, slog.LevelInfo, name))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, name+":", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Getenv, os.Stdout)
+	err = run(ctx, os.Getenv, os.Stdout)
 	stop()
+	flushCtx, cancel := context.WithTimeout(context.Background(), tracingFlushTimeout)
+	if flushErr := flushTracing(flushCtx); flushErr != nil {
+		fmt.Fprintln(os.Stderr, name+": flush traces:", flushErr)
+	}
+	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, name+":", err)
 		os.Exit(1)
 	}
 }
+
+// tracingFlushTimeout bounds sending the last spans at shutdown. It fits in
+// the time Kubernetes leaves after the server's own shutdown (the chart's
+// terminationGracePeriodSeconds keeps 5s spare).
+const tracingFlushTimeout = 3 * time.Second
 
 // NewLogger returns a JSON logger to out at level. Every line carries
 // "service": name, so lines from different services can be told apart.
