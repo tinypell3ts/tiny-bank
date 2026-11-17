@@ -235,17 +235,41 @@ func TestALostReplyIsReplayedWithTheSameKey(t *testing.T) {
 	}
 }
 
+// keyReusedFor answers like its fakeLedger, except that it answers transfer
+// bug with a key-reused 412 once requests are done (after calls), whichever
+// order the finisher posts in: ClaimDue's RETURNING has no fixed order.
+type keyReusedFor struct {
+	*fakeLedger
+	bug   uuid.UUID
+	after int
+}
+
+func (l *keyReusedFor) Post(ctx context.Context, t Transfer) (uuid.UUID, error) {
+	id, err := l.fakeLedger.Post(ctx, t)
+	if t.ID == l.bug && l.calls() > l.after {
+		return uuid.Nil(), errKeyReusedBug
+	}
+	return id, err
+}
+
 func TestFinishDueGoesOnPastOneTransfersError(t *testing.T) {
-	s, ledger := newTestService(t, errUnreachable, errUnreachable, errUnreachable,
-		errUnreachable, errUnreachable, errUnreachable, errKeyReusedBug, nil)
-	first := leftPending(t, s, "t1")
-	second := leftPending(t, s, "t2")
+	requestCalls := 2 * attemptsPerRequest
+	answers := make([]error, requestCalls, requestCalls+1)
+	for i := range answers {
+		answers[i] = errUnreachable
+	}
+	ledger := &keyReusedFor{fakeLedger: &fakeLedger{answers: append(answers, nil), journal: uuid.New()}, after: requestCalls}
+	s := NewService(newTestStore(t), ledger, prometheus.NewRegistry())
+	buggy := leftPending(t, s, "t1")
+	ledger.bug = buggy.ID
+	other := leftPending(t, s, "t2")
+
 	if tried, err := s.FinishDue(t.Context(), discard); err != nil || tried != 2 {
 		t.Fatalf("FinishDue = %d, %v; want both tried", tried, err)
 	}
-	a, _ := s.Get(t.Context(), first.ID)
-	b, _ := s.Get(t.Context(), second.ID)
-	if a.State != StatePending || b.State != StateCompleted || ledger.calls() != 8 {
+	a, _ := s.Get(t.Context(), buggy.ID)
+	b, _ := s.Get(t.Context(), other.ID)
+	if a.State != StatePending || b.State != StateCompleted || ledger.calls() != requestCalls+2 {
 		t.Errorf("states %s, %s after %d calls; want the bug left pending and the other completed", a.State, b.State, ledger.calls())
 	}
 }
