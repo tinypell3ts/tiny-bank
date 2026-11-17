@@ -39,6 +39,7 @@ Current:
 .
 ├── AGENTS.md            # this file (CLAUDE.md points here)
 ├── README.md            # overview + quickstart
+├── SECURITY.md          # how to report a vulnerability (GitHub shows it in the Security tab)
 ├── go.mod               # single Go module for the whole monorepo
 ├── Makefile             # fmt, lint, test, check, docker-* — CI runs the same targets
 ├── Dockerfile           # one multi-stage, distroless image recipe for every service (PKG build arg)
@@ -65,6 +66,7 @@ Current:
 └── docs/
     ├── architecture.md  # evolving architecture diagram
     ├── observability.md # logs, metrics, traces — what exists and why
+    ├── security.md      # what we protect, trust boundaries, controls, known gaps
     ├── adr/             # Architecture Decision Records (NNNN-title.md)
     └── phases/          # one page per phase: what was built and why
 ```
@@ -107,6 +109,10 @@ Use `make dev` for everyday work, and `make deploy` for a one-off deploy without
 
 Cluster commands use the kubectl context `kind-tiny-bank`. Always pass `--context kind-tiny-bank` in scripts and docs, so nothing ever runs against another cluster by accident.
 
+To look inside a service's database, run `kubectl --context kind-tiny-bank exec -it <name>-db-1 -c postgres -- psql app` (for the account service, `account-db-1`). Its tables are the service's migrations, in `services/<name>/migrations/`. Only read, unless the human asks you to change data.
+
+**When debugging, look before you change anything, and never destroy data to fix a problem.** `make dev-down`, `make undeploy`, `make cluster-down` and deleting a database `Cluster` or its PVC all delete every account in it. Ask the human first, even if starting over looks like the quickest fix.
+
 Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs the same targets on every PR, plus a `branch-name` job.
 
 ## Conventions
@@ -118,7 +124,7 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 - **Metrics come from `pkg/obs`.** `kit.Handler` serves `GET /metrics` and records HTTP metrics for every service. Metric labels must have a small, fixed set of values: use route patterns (`/accounts/:id`), never raw paths, IDs, emails or amounts.
 - **Kubernetes-ready from day one:** expose `/healthz` (liveness) and `/readyz` (readiness), shut down gracefully on `SIGTERM`, and keep no local file state.
 - **Errors:** wrap with context (`fmt.Errorf("open account: %w", err)`). Never leak internal errors to API clients. Never put secrets, tokens or personal details in an error: when a request fails, `pkg/kit` logs the full error, because it's the only record of why.
-- **Secrets are `kit.Secret`.** Every secret read from the environment (like `DATABASE_URL`) is stored as a `kit.Secret`. It prints as `xxxxx` everywhere (fmt, slog, errors, JSON), so logging a config can't leak it. Call `.Reveal()` only where the value is used, such as `db.Open`, never to log or return it.
+- **Secrets are `kit.Secret`.** Every secret read from the environment (like `DATABASE_URL`) is stored as a `kit.Secret`. It prints as `xxxxx` everywhere (fmt, slog, errors, JSON), so logging a config can't leak it. Call `.Reveal()` only where the value is used, such as `db.Open`, never to log or return it. Why this beats redacting logs: [ADR-0008](docs/adr/0008-stop-secrets-where-they-enter.md).
 - **terrors travel between services.** Typhon sends an error's code, message and params to the calling service ([ADR-0007](docs/adr/0007-build-services-on-typhon-and-terrors.md)). Never put secrets, passwords, tokens or personal details (names, emails, full account numbers) in a terror's message or params. To check a terror that may be wrapped, find it with `errors.As(err, &terr)` first: `terrors.PrefixMatches(err, …)` and `terrors.Is` don't look inside `fmt.Errorf("…: %w")`.
 - **Tests:** table-driven where it fits. Standard library `testing` first. Tests that need a real dependency (Postgres) go in `*_integration_test.go` files tagged `//go:build integration`, and start it with testcontainers. `make check` skips them; `make test-integration` and CI run them.
 - **Databases:** connect with `db.Open` from `pkg/db`, using `DATABASE_URL` from the environment. Never build connection strings by hand, and never log `DATABASE_URL` itself (errors from `db.Open` are safe to log).
@@ -126,6 +132,21 @@ Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs 
 - **One Go module** for the monorepo, so every service always builds against the latest shared code.
 - **Bump Go in three places together:** `go.mod`, `GO_VERSION` in the `Dockerfile`, and the golangci-lint version in CI, which must be built with a Go version at least as new.
 - **Images** are distroless and run as non-root. Never add a shell or package manager to the runtime stage.
+
+## Security
+
+tiny-bank handles money and personal data, so these rules apply to every change. The Conventions above on secrets, logs, errors, terrors and images are security rules too. [docs/security.md](docs/security.md) explains what each control protects against and which gaps are still open. Read it before working on anything that touches access, input handling, secrets or the deployment.
+
+- **Nothing is reachable from outside the cluster until Phase 12.** There's no sign-in yet: any caller that can reach a service can open an account for any customer and read any account. So every service stays a `ClusterIP` Service. Never add an Ingress, a `NodePort` or `LoadBalancer` Service, or a `hostPort`, and never widen a `kubectl port-forward` beyond localhost.
+- **Personal data stays out of side channels.** Holder names, customer IDs and anything a customer types never go in metric labels, terror messages or params, or error text. Account IDs are random UUIDs, not bank account numbers, so they may appear in paths and logs.
+- **Caller input never becomes SQL.** Queries pass every value as a parameter (`$1`). Never build SQL from caller input, even after validating it.
+- **Turn caller input into typed values at the edge.** Handlers parse text into `uuid.UUID`, `money.Currency` and checked domain types before anything else uses it, and accept only canonical forms, so one account has one URL.
+- **Never weaken a check to get green.** Don't loosen a validation, delete or skip a failing test, add a `nolint`, or drop a CI step to make something pass. Fix the cause, or stop and ask.
+- **Anything that moves money is idempotent** (from Phase 7): the same request sent twice moves money once.
+- **New dependencies are a security decision.** Add one only when the standard library or an existing dependency can't do the job, say why in the PR, and pin it in `go.mod`.
+- **Stop and ask the human before changing** `kit.Handler`'s filters (error cleaning above all), `kit.Secret`, `kit.Decode`'s limits, the pod security settings in `deploy/charts/service/templates/deployment.yaml`, or anything that changes what can reach a service.
+- **Found a vulnerability while working? Tell the human straight away**, and don't put the details in a public issue, PR or commit message ([SECURITY.md](SECURITY.md)).
+- **Keep [docs/security.md](docs/security.md) true, in the same PR.** It goes stale most often through code and deploy changes, not docs. If a change touches a control, a known gap, or a file either one links to, update that row. Closing a gap moves it to the controls table, and a new control gets a row. An ADR states its security impact in its Security section ([template](docs/adr/template.md)). A security choice with real alternatives, such as how secrets are kept out of logs, gets its own ADR; a plain rule belongs here instead.
 
 ## Engineering principles
 

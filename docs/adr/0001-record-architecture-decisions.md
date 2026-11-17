@@ -22,3 +22,7 @@ Copy [template.md](template.md) to start a new one.
 
 - Decisions and their reasons stay next to the code and are reviewed in PRs.
 - Writing an ADR costs a few minutes, so we only write them for decisions that are hard to reverse or would surprise a newcomer.
+
+## Update (2026-11-17)
+
+New ADRs also have a **Security** section, after Consequences, saying what the decision changes for security, or "None". When something changes, the same PR updates [docs/security.md](../security.md). Earlier ADRs are left as written: the security reasoning they contain is already in `docs/security.md`.
