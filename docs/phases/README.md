@@ -1,6 +1,6 @@
 # Phases
 
-tiny-bank is built in small phases, each one PR. Each phase gets its own page (`NN-title.md`) once it's built, covering what was built, the key concepts behind it and how to verify it.
+tiny-bank is built in small phases, each a stack of small PRs of about 200 changed lines (at most 400) ([AGENTS.md](../../AGENTS.md#working-agreement)). Each phase gets its own page (`NN-title.md`) once it's built, covering what was built, the key concepts behind it and how to verify it.
 
 Infrastructure comes first, so every service is born on Kubernetes.
 

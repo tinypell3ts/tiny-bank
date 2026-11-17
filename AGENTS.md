@@ -10,7 +10,9 @@ The target runtime is **Docker on Kubernetes**: a local kind cluster, services d
 
 ## Working agreement
 
-- Work in **small phases**. Each phase is one PR, split into several small commits. The plan lives in [docs/phases/](docs/phases/).
+- Work in **small phases**. The plan lives in [docs/phases/](docs/phases/).
+- **A phase is a stack of small PRs, each one concern someone can review in under an hour.** Aim for about 200 changed lines per PR and never more than 400. Tests and docs count; generated code (`*.pb.go`) doesn't. Reviewers find far fewer bugs past about 400 lines (the SmartBear study of Cisco's reviews), and small PRs merge faster and roll back cleanly ([Google's guide to small changes](https://google.github.io/eng-practices/review/developer/small-cls.html)). Measure lines, not files: one change here touches its code, its test and its docs. More than about 10 files is only a sign to check that a PR is really one change. Plan the split when you plan the phase, not when the PR is already large, and check the size before handing work back (`git diff --shortstat main...HEAD -- . ':!*.pb.go'`).
+- **Shared code goes in its own PR first.** When a second service needs something another already has (the rule of two), move it into `pkg/` in a small `refactor/` PR, moving the first service onto it too, and merge that before the feature that uses it. So a PR is either new shared code or a feature built on it, never both.
 - **Agents never run git write commands.** Do not create branches, commit, push or tag. Write the files, explain them, and suggest how to commit them. The human runs git. Agents open or edit a PR only when the human asks (see [Pull requests](#pull-requests)).
 - After each step: give each commit as a `git add -A -- <paths>` command followed by its Conventional Commit message (`-A --` stages deletions too), explain the concepts and why, give a verify command, then **stop for questions**.
 - **A PR is not done without tests and docs.** New code gets tests. Changed behaviour gets updated docs (README, `docs/`, ADRs, and `AGENTS.md` if layout or commands change).
