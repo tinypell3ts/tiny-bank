@@ -29,7 +29,7 @@ func post(t *testing.T, url, body, requestID string) (int, string) {
 }
 
 // accountService runs the real account service's routes, on its own
-// Postgres, and returns its URL and logs. The ledger checks accounts with it.
+// database, and returns its URL and logs. The ledger checks accounts with it.
 func accountService(t *testing.T) (string, *kittest.Logs) {
 	t.Helper()
 	return kittest.Serve(t, "account", func(r *typhon.Router) {
@@ -58,7 +58,7 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 	accountURL, accountLogs := accountService(t)
 	alice, bob := openAccount(t, accountURL), openAccount(t, accountURL)
 
-	url := dbtest.StartPostgres(t, "s3cret")
+	url := dbtest.Database(t)
 	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": url, "ACCOUNT_URL": accountURL})
 	if !strings.Contains(logs.String(), `"applied":["00001_create_ledger.sql","00002_append_only_journals.sql","00003_record_refusals.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)

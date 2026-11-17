@@ -47,7 +47,7 @@ test: ## Run unit tests with the race detector and coverage
 
 # Files tagged //go:build integration start real dependencies (Postgres) in
 # Docker with testcontainers, so they're slower and need Docker running.
-test-integration: ## Run integration tests against real Postgres in Docker (needs Docker)
+test-integration: ## Run unit and integration tests against real Postgres in Docker (needs Docker)
 	go test -race -cover -tags=integration ./...
 
 test-scripts: ## Test the shell scripts in scripts/

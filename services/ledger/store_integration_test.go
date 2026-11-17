@@ -20,7 +20,7 @@ import (
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
-// newTestStore returns a Store on a throwaway Postgres with the service's
+// newTestStore returns a Store on a throwaway database with the service's
 // real migrations applied. Every test ends by checking the ledger still adds
 // up.
 func newTestStore(t *testing.T) *Store {

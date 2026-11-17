@@ -58,7 +58,7 @@ func TestTransactionAPIEndToEnd(t *testing.T) {
 		store := ledger.NewStore(dbtest.Migrated(t, ledger.Migrations()))
 		ledger.RegisterRoutes(r, ledger.NewService(store, ledger.AccountService{BaseURL: accountURL}, prometheus.NewRegistry()))
 	})
-	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": dbtest.StartPostgres(t, "s3cret"), "LEDGER_URL": ledgerURL})
+	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": dbtest.Database(t), "LEDGER_URL": ledgerURL})
 	if !strings.Contains(logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql","00003_lease_transfers.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
@@ -105,7 +105,7 @@ func TestTransactionAPIEndToEnd(t *testing.T) {
 	if status, got := kittest.Get(t, base+"/transfers/"+tr.ID); status != http.StatusOK || decode(t, got).JournalID != tr.JournalID {
 		t.Errorf("GET = %d %s, want the completed transfer", status, got)
 	}
-	if strings.Contains(logs.String(), "s3cret") {
+	if strings.Contains(logs.String(), dbtest.Password) {
 		t.Error("logs leak the database password")
 	}
 }

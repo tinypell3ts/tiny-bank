@@ -23,14 +23,14 @@ func startService(t *testing.T, url string) (base string, logs *kittest.Logs) {
 }
 
 func TestServiceMigratesThenServes(t *testing.T) {
-	url := dbtest.StartPostgres(t, "s3cret")
+	url := dbtest.Database(t)
 	_, logs := startService(t, url)
 
 	// The first start applied the accounts migration and said so.
 	if !strings.Contains(logs.String(), `"applied":["00001_create_accounts.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
-	if strings.Contains(logs.String(), "s3cret") {
+	if strings.Contains(logs.String(), dbtest.Password) {
 		t.Error("logs leak the database password")
 	}
 
@@ -77,7 +77,7 @@ func TestServiceMigratesThenServes(t *testing.T) {
 }
 
 func TestServiceRestartAppliesNothing(t *testing.T) {
-	url := dbtest.StartPostgres(t, "s3cret")
+	url := dbtest.Database(t)
 	startService(t, url) // first deploy
 	_, logs := startService(t, url)
 
@@ -87,6 +87,7 @@ func TestServiceRestartAppliesNothing(t *testing.T) {
 }
 
 func TestReadyzFailsWhenTheDatabaseGoesAway(t *testing.T) {
+	// A server of its own, not dbtest.Database: this test takes it away.
 	url := dbtest.StartPostgres(t, "s3cret")
 	base, _ := startService(t, url)
 
@@ -134,7 +135,7 @@ func TestReadyzFailsWhenTheDatabaseGoesAway(t *testing.T) {
 }
 
 func TestAccountAPIEndToEnd(t *testing.T) {
-	base, _ := startService(t, dbtest.StartPostgres(t, "s3cret"))
+	base, _ := startService(t, dbtest.Database(t))
 
 	// Open an account.
 	body := `{"customer_id":"c0ffee00-0000-4000-8000-000000000001","holder_name":"Ada Lovelace","currency":"GBP"}`
