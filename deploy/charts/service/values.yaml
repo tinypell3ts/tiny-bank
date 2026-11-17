@@ -26,6 +26,10 @@ shutdownTimeoutSeconds: 10
 # PORT and SHUTDOWN_TIMEOUT are set by the chart from the values above.
 config:
   LOG_LEVEL: info
+  # Where to send traces (OTLP over HTTP): Jaeger, installed by `make jaeger`.
+  # If it isn't installed, spans fail to send and are dropped, with a warning
+  # in the logs; requests aren't affected. Set it to "" to turn tracing off.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger.jaeger:4318
 
 # Create a ServiceMonitor so Prometheus scrapes GET /metrics. Needs the
 # monitoring stack's CRDs on the cluster (`make monitoring`, or `make dev`).
