@@ -3,9 +3,9 @@ syntax = "proto3";
 // The ledger service's API: moving money between accounts, and reading
 // balances. The ledger is the one record of every movement of money.
 //
-// It's internal, called by other services. Requests and responses are JSON,
-// using these field names (idempotency_key). Binary protobuf arrives with the
-// first service-to-service client, later in Phase 7.
+// It's internal, called by other services. Requests are JSON, using these
+// field names (idempotency_key). Responses are JSON too, or binary protobuf
+// for a caller that sends Accept: application/protobuf.
 //
 //   POST /journals              PostJournalRequest -> Journal
 //                               (201 with a Location header; 200 with the

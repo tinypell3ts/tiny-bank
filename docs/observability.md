@@ -18,7 +18,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 1 | Kubernetes liveness/readiness probes using those endpoints, logs via `kubectl logs` and the Tilt dashboard ✅ |
 | 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard ✅ |
 | 5.5 | Shared Typhon filters in `pkg/kit` for request IDs, access logs and RED metrics, applied to every service ✅ |
-| 7 | Request ID passed on to downstream services in Typhon client calls, so one ID follows a request across services; ledger audit trail and business metrics |
+| 7 | Request ID passed on to downstream services by `kit.Get`, so one ID follows a request across services ✅; ledger audit trail and business metrics |
 | 8 | OpenTelemetry tracing across services |
 | 10–11 | Trace context in Kafka headers, outbox backlog and consumer lag metrics |
 | 13 | Dashboards and alert rules |
