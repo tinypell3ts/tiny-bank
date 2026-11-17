@@ -6,7 +6,7 @@ What tiny-bank protects, where its trust boundaries are, which controls are in p
 
 | Asset | Why it matters |
 |---|---|
-| **Money** | A balance must never be wrong. Amounts are `int64` minor units, never floats ([ADR-0004](adr/0004-represent-money-as-int64-minor-units.md)); the ledger, from Phase 7, is the record of every movement. |
+| **Money** | A balance must never be wrong. Amounts are `int64` minor units, never floats ([ADR-0004](adr/0004-represent-money-as-int64-minor-units.md)); the ledger is the record of every movement, as double-entry journals ([ADR-0009](adr/0009-record-money-as-double-entry-journals-with-locked-balances.md)). |
 | **Personal data** | Holder names and customer IDs identify real people. They stay in the owning service's database, and out of side channels such as metric labels, error messages and terror params. |
 | **Secrets** | `DATABASE_URL` holds a database password. Leaking it gives full access to that service's data. |
 | **Availability** | One bad request, or one misbehaving caller, mustn't take a service down for everyone. |
