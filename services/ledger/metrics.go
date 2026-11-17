@@ -6,6 +6,8 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
 // metrics are the ledger's business metrics: what happens to money, beside
@@ -64,10 +66,11 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 
 // record counts one post of req, which returned j, created and err.
 func (m *metrics) record(req NewJournal, j Journal, created bool, err error) {
-	currency := "unknown" // a request too broken to have one
-	if len(req.Entries) > 0 && req.Entries[0].Amount.Currency().Code() != "" {
-		currency = req.Entries[0].Amount.Currency().Code()
+	var c money.Currency
+	if len(req.Entries) > 0 {
+		c = req.Entries[0].Amount.Currency()
 	}
+	currency := currencyLabel(c)
 	outcome, reason := outcomeOf(created, err)
 	m.journals.WithLabelValues(currency, outcome, reason).Inc()
 	if outcome == outcomePosted {
@@ -79,6 +82,25 @@ func (m *metrics) record(req NewJournal, j Journal, created bool, err error) {
 		}
 		m.moved.WithLabelValues(currency).Add(moved)
 	}
+}
+
+// refused counts a post turned away by the HTTP handler before it reached
+// Service.Post. Its reason is the terror's code, which for these is one of a
+// few fixed ones: kit.Decode's (bad_request.invalid_json, content_type,
+// too_large, unreadable_body) and the handler's (bad_request.currency,
+// bad_request.entries).
+func (m *metrics) refused(c money.Currency, err error) {
+	_, reason := outcomeOf(false, err)
+	m.journals.WithLabelValues(currencyLabel(c), outcomeRefused, reason).Inc()
+}
+
+// currencyLabel is c's code, or "unknown" for a request too broken to have a
+// supported currency.
+func currencyLabel(c money.Currency) string {
+	if c.Code() == "" {
+		return "unknown"
+	}
+	return c.Code()
 }
 
 func outcomeOf(created bool, err error) (outcome, reason string) {

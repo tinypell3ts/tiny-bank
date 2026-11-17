@@ -21,6 +21,11 @@ type Ledger interface {
 	Post(ctx context.Context, req NewJournal) (Journal, bool, error)
 	Journal(ctx context.Context, id uuid.UUID) (Journal, error)
 	Balance(ctx context.Context, id uuid.UUID) (Balance, error)
+	// CountRefusal counts a post the handler refused before it reached Post
+	// (a body that isn't valid JSON, an unsupported currency, a malformed
+	// account ID), so the metrics see every refusal, not only Post's.
+	// currency is the zero Currency if the request didn't get that far.
+	CountRefusal(currency money.Currency, err error)
 }
 
 // RegisterRoutes adds the ledger API to router. Its contract, the request and
@@ -49,23 +54,30 @@ type handler struct {
 }
 
 func (h handler) post(req typhon.Request) typhon.Response {
+	// refuse answers a request turned away before Post, counting it as Post
+	// counts its own refusals.
+	refuse := func(currency money.Currency, err error) typhon.Response {
+		h.ledger.CountRefusal(currency, err)
+		return typhon.Response{Error: err}
+	}
+
 	var body ledgerv1.PostJournalRequest
 	if err := kit.Decode(req, &body); err != nil {
-		return typhon.Response{Error: err}
+		return refuse(money.Currency{}, err)
 	}
 
 	// Turn untrusted text into typed values here, at the edge. Validate then
 	// checks the rules that need the whole journal.
 	currency, err := money.ParseCurrency(body.GetCurrency())
 	if err != nil {
-		return typhon.Response{Error: invalid("currency", "currency must be a supported ISO 4217 code, like GBP")}
+		return refuse(money.Currency{}, invalid("currency", "currency must be a supported ISO 4217 code, like GBP"))
 	}
 	entries := make([]Entry, len(body.GetEntries()))
 	for i, e := range body.GetEntries() {
 		id, ok := kit.ParseUUID(e.GetAccountId())
 		if !ok {
-			return typhon.Response{Error: invalid("entries",
-				fmt.Sprintf("entry %d's account_id must be a lower-case UUID with dashes", i+1))}
+			return refuse(currency, invalid("entries",
+				fmt.Sprintf("entry %d's account_id must be a lower-case UUID with dashes", i+1)))
 		}
 		entries[i] = Entry{AccountID: id, Amount: money.New(e.GetAmount(), currency)}
 	}

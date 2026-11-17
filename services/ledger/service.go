@@ -48,6 +48,11 @@ func (s *Service) Post(ctx context.Context, req NewJournal) (j Journal, created 
 	return s.checkAndPost(ctx, req)
 }
 
+// CountRefusal counts a post the HTTP handler refused before it reached Post.
+func (s *Service) CountRefusal(currency money.Currency, err error) {
+	s.metrics.refused(currency, err)
+}
+
 // checkAndPost validates req, answers a retry with its first journal, checks
 // the accounts, and posts. Post wraps it so every return is counted.
 func (s *Service) checkAndPost(ctx context.Context, req NewJournal) (Journal, bool, error) {
@@ -63,6 +68,13 @@ func (s *Service) checkAndPost(ctx context.Context, req NewJournal) (Journal, bo
 		return j, false, nil
 	}
 	if err := checkAccounts(ctx, s.accounts, req.Entries); err != nil {
+		// Another request with the same key may have posted while these checks
+		// ran: it passed them, and this one's lookup timed out, say. Its money
+		// has moved, so this request is a retry of it and gets its journal,
+		// not an error that would say nothing moved.
+		if j, found, lookupErr := s.posted(ctx, req); lookupErr == nil && found {
+			return j, false, nil
+		}
 		return Journal{}, false, fmt.Errorf("post journal: %w", err)
 	}
 	return s.postValid(ctx, req)

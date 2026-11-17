@@ -130,3 +130,51 @@ func TestServiceRetryGetsTheFirstJournal(t *testing.T) {
 	_, _, err = s.Post(t.Context(), transfer("t1", alice, bob, 301))
 	wantCode(t, err, "precondition_failed.idempotency_key")
 }
+
+// gatedAccounts holds every lookup until gate is closed, then fails it, like
+// an account service that times out.
+type gatedAccounts struct {
+	asked chan struct{} // gets a value when a lookup starts
+	gate  chan struct{}
+}
+
+func (g gatedAccounts) Account(_ context.Context, _ uuid.UUID) (AccountInfo, error) {
+	g.asked <- struct{}{}
+	<-g.gate
+	return AccountInfo{}, errors.New("account service timed out")
+}
+
+// TestServiceRetryOverlappingTheFirstPostGetsItsJournal is Greptile's race on
+// PR #10: two requests with the same key both find no journal yet. The first
+// passes its checks and posts; the second's account lookup times out. The
+// second must still get the first's journal, since its money has moved.
+func TestServiceRetryOverlappingTheFirstPostGetsItsJournal(t *testing.T) {
+	first, _ := newTestService(t)
+	fund(t, first.Store, alice, 1000)
+	slow := gatedAccounts{asked: make(chan struct{}, 2), gate: make(chan struct{})}
+	retry := NewService(first.Store, slow, prometheus.NewRegistry())
+
+	type result struct {
+		j       Journal
+		created bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		j, created, err := retry.Post(t.Context(), transfer("t1", alice, bob, 300))
+		done <- result{j, created, err}
+	}()
+	<-slow.asked // the retry has missed the lookup and is checking accounts
+
+	posted, created, err := first.Post(t.Context(), transfer("t1", alice, bob, 300))
+	if err != nil || !created {
+		t.Fatalf("first post = %v, created %v", err, created)
+	}
+	close(slow.gate) // now the retry's account lookup fails
+
+	got := <-done
+	if got.err != nil || got.created || got.j.ID != posted.ID {
+		t.Fatalf("retry = %v, created %v; want the first post's journal %s, not an error", got.err, got.created, posted.ID)
+	}
+	wantBalance(t, first.Store, alice, gbp(700)) // moved once
+}

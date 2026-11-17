@@ -148,6 +148,11 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 	if status, body := kittest.Get(t, base+"/journals/"+j.ID); status != http.StatusOK || body != first {
 		t.Errorf("GET journal = %d %s, want %s", status, body, first)
 	}
+	// A request the handler refuses before Post is counted too.
+	if status, _ := post(t, base+"/journals", `{"idempotency_key":"t4","currency":"XYZ","entries":[]}`, ""); status != http.StatusBadRequest {
+		t.Errorf("unsupported currency = %d, want 400", status)
+	}
+
 	// The business metrics: two journals posted (the deposit and t1), one
 	// retry, and two refusals.
 	_, metrics := kittest.Get(t, base+"/metrics")
@@ -157,6 +162,7 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 		`ledger_journals_total{currency="GBP",outcome="refused",reason="precondition_failed.insufficient_funds"} 1`,
 		`ledger_journals_total{currency="GBP",outcome="refused",reason="not_found.account"} 1`,
 		`ledger_moved_minor_units_total{currency="GBP"} 1300`,
+		`ledger_journals_total{currency="unknown",outcome="refused",reason="bad_request.currency"} 1`,
 	} {
 		if !strings.Contains(metrics, want) {
 			t.Errorf("/metrics is missing %s", want)

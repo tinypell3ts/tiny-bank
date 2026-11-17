@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
@@ -27,6 +29,14 @@ type fakeLedger struct {
 	journals map[uuid.UUID]Journal
 	byKey    map[string]uuid.UUID
 	balances map[uuid.UUID]Balance
+	posts    int      // calls to Post
+	refusals []string // calls to CountRefusal, as "<currency label> <code>"
+}
+
+func (f *fakeLedger) CountRefusal(currency money.Currency, err error) {
+	var terr *terrors.Error
+	errors.As(err, &terr)
+	f.refusals = append(f.refusals, currencyLabel(currency)+" "+terr.Code)
 }
 
 func newFake() *fakeLedger {
@@ -34,6 +44,7 @@ func newFake() *fakeLedger {
 }
 
 func (f *fakeLedger) Post(_ context.Context, req NewJournal) (Journal, bool, error) {
+	f.posts++
 	req, err := req.Validate()
 	if err != nil {
 		return Journal{}, false, err
@@ -139,28 +150,40 @@ func TestPostJournal(t *testing.T) {
 
 func TestPostJournalRefusesBadInput(t *testing.T) {
 	entries := `"entries":[{"account_id":"b0b00000-0000-4000-8000-000000000002","amount":300},{"account_id":"a11ce000-0000-4000-8000-000000000001","amount":-300}]`
+	// counted is what CountRefusal should get for a request the handler
+	// refuses itself; empty means it reaches Post, which counts its own.
 	tests := []struct {
-		name, body, wantCode string
+		name, body, wantCode, counted string
 	}{
-		{"no currency", `{"idempotency_key":"t1",` + entries + `}`, "bad_request.currency"},
-		{"unsupported currency", `{"idempotency_key":"t1","currency":"XYZ",` + entries + `}`, "bad_request.currency"},
-		{"no key", `{"currency":"GBP",` + entries + `}`, "bad_request.idempotency_key"},
+		{"no currency", `{"idempotency_key":"t1",` + entries + `}`, "bad_request.currency", "unknown bad_request.currency"},
+		{"unsupported currency", `{"idempotency_key":"t1","currency":"XYZ",` + entries + `}`, "bad_request.currency", "unknown bad_request.currency"},
+		{"no key", `{"currency":"GBP",` + entries + `}`, "bad_request.idempotency_key", ""},
 		{"upper-case account ID", `{"idempotency_key":"t1","currency":"GBP","entries":[` +
 			`{"account_id":"B0B00000-0000-4000-8000-000000000002","amount":300},{"account_id":"a11ce000-0000-4000-8000-000000000001","amount":-300}]}`,
-			"bad_request.entries"},
+			"bad_request.entries", "GBP bad_request.entries"},
 		{"doesn't add up", `{"idempotency_key":"t1","currency":"GBP","entries":[` +
 			`{"account_id":"b0b00000-0000-4000-8000-000000000002","amount":300},{"account_id":"a11ce000-0000-4000-8000-000000000001","amount":-299}]}`,
-			"bad_request.entries"},
+			"bad_request.entries", ""},
 		{"amount with a fraction", `{"idempotency_key":"t1","currency":"GBP","entries":[` +
 			`{"account_id":"b0b00000-0000-4000-8000-000000000002","amount":3.5},{"account_id":"a11ce000-0000-4000-8000-000000000001","amount":-3.5}]}`,
-			"bad_request.invalid_json"},
-		{"unknown field", `{"idempotency_key":"t1","currency":"GBP","memo":"hi",` + entries + `}`, "bad_request.invalid_json"},
+			"bad_request.invalid_json", "unknown bad_request.invalid_json"},
+		{"unknown field", `{"idempotency_key":"t1","currency":"GBP","memo":"hi",` + entries + `}`, "bad_request.invalid_json", "unknown bad_request.invalid_json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := serve(t, newFake(), http.MethodPost, "/journals", tt.body)
+			ledger := newFake()
+			rec := serve(t, ledger, http.MethodPost, "/journals", tt.body)
 			if rec.Code != http.StatusBadRequest || errorCode(t, rec) != tt.wantCode {
 				t.Errorf("= %d %s, want 400 %s", rec.Code, rec.Body, tt.wantCode)
+			}
+			// Every refusal is counted exactly once: by the handler if it
+			// stopped the request, otherwise by Post.
+			if tt.counted == "" {
+				if len(ledger.refusals) != 0 || ledger.posts != 1 {
+					t.Errorf("refusals %v, posts %d; want Post to count it, once", ledger.refusals, ledger.posts)
+				}
+			} else if len(ledger.refusals) != 1 || ledger.refusals[0] != tt.counted || ledger.posts != 0 {
+				t.Errorf("refusals %v, posts %d; want [%s] and no post", ledger.refusals, ledger.posts, tt.counted)
 			}
 		})
 	}

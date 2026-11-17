@@ -64,7 +64,7 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
   | `ledger_journals_total` | counter | `currency`, `outcome` (`posted`, `retried`, `refused`, `failed`), `reason` (a refusal's terror code) | How much money moving is happening, how often retries arrive, and why posts are refused |
   | `ledger_moved_minor_units_total` | counter | `currency` | How much money new journals move, in minor units (pence for GBP) |
 
-  Every label has a fixed set of values, never an account ID or an amount. `reason` is a refusal's terror code, which is always one of the ledger's own constants: none is built from what a caller sent, and the account service's codes are turned into the ledger's before they could reach a label.
+  Every label has a fixed set of values, never an account ID or an amount. Every refusal is counted once, including those the HTTP handler turns away before the ledger's rules run (invalid JSON, an unsupported currency, a malformed account ID), with currency `unknown` when there isn't a supported one yet. `reason` is a refusal's terror code, which is always one of the ledger's or `kit.Decode`'s own constants: none is built from what a caller sent, and the account service's codes are turned into the ledger's before they could reach a label.
 
 - **Following one request across services:** `kit.Get` passes the request ID on, so the same `request_id` is in the ledger's log lines and in the account service's lines for its checks. Each journal stores the request ID that posted it, so the audit trail leads from a movement of money to the logs of the request that made it.
 
