@@ -3,6 +3,7 @@ package kit
 import (
 	"context"
 	"errors"
+	"net/url"
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
@@ -91,4 +92,49 @@ func routeOf(req typhon.Request, rsp typhon.Response, router *typhon.Router) str
 		}
 	}
 	return router.Pattern(req)
+}
+
+// forwardTrace sets the W3C traceparent header on an outgoing request from
+// the span in its context, so the other service continues this trace.
+func forwardTrace(req typhon.Request, next typhon.Service) typhon.Response {
+	otel.GetTextMapPropagator().Inject(req.Context, propagation.HeaderCarrier(req.Header))
+	return next(req)
+}
+
+// startCallSpan starts a client span for a call to target, under the span in
+// ctx (the request being handled), so the trace shows where time went. It's
+// named by method and the other service, from target's host ("POST ledger"),
+// never its path, which may hold IDs: the same rule as server spans.
+func startCallSpan(ctx context.Context, method, target string) (context.Context, trace.Span) {
+	host := "unknown"
+	if u, err := url.Parse(target); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	method = obs.MethodLabel(method)
+	return otel.Tracer(tracerName).Start(ctx, method+" "+host,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("http.request.method", method),
+			attribute.String("server.address", host),
+		))
+}
+
+// endCallSpan ends a client span with the call's status (0 if no response
+// came back) and its error. Any failed call marks the span failed: from the
+// caller's side a refusal is a failure too. A terror's code is recorded as
+// error.type; any other error (a timeout, no connection) as "_OTHER".
+func endCallSpan(span trace.Span, status int, err error) {
+	if status != 0 {
+		span.SetAttributes(attribute.Int("http.response.status_code", status))
+	}
+	if err != nil {
+		errorType := "_OTHER"
+		var terr *terrors.Error
+		if errors.As(err, &terr) {
+			errorType = terr.Code
+		}
+		span.SetAttributes(attribute.String("error.type", errorType))
+		span.SetStatus(codes.Error, "")
+	}
+	span.End()
 }

@@ -7,13 +7,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monzo/terrors"
+	"github.com/monzo/typhon"
+	"google.golang.org/protobuf/types/known/apipb"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-	"go.opentelemetry.io/otel/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // recordSpans turns tracing on for one test, keeping every finished span in
@@ -66,7 +70,7 @@ func TestASpanContinuesTheCallersTrace(t *testing.T) {
 		t.Errorf("span is in trace %s under %s, want the caller's trace %s under its span %s",
 			s.SpanContext.TraceID(), s.Parent.SpanID(), callerTraceID, callerSpanID)
 	}
-	if s.SpanKind != trace.SpanKindServer || s.Name != "GET /things/:id" {
+	if s.SpanKind != oteltrace.SpanKindServer || s.Name != "GET /things/:id" {
 		t.Errorf("span = %s %q, want a server span named by route pattern", s.SpanKind, s.Name)
 	}
 	a := attrs(s)
@@ -159,4 +163,80 @@ func attributeText(s tracetest.SpanStub) string {
 		b.WriteString(kv.Value.String())
 	}
 	return b.String()
+}
+
+// spanNamed returns the one finished span called name.
+func spanNamed(t *testing.T, exporter *tracetest.InMemoryExporter, name string) tracetest.SpanStub {
+	t.Helper()
+	var found []tracetest.SpanStub
+	for _, s := range exporter.GetSpans() {
+		if s.Name == name {
+			found = append(found, s)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("got %d spans named %q, want 1, among %d", len(found), name, len(exporter.GetSpans()))
+	}
+	return found[0]
+}
+
+// TestACallJoinsTheTrace: a request handler calls another service. The
+// call's client span sits under the handler's span, and the other service's
+// server span under the call's, all in one trace: one request, one timeline.
+func TestACallJoinsTheTrace(t *testing.T) {
+	exporter := recordSpans(t)
+	base := otherService(t, func(r *typhon.Router) {
+		r.GET("/accounts/:id", func(req typhon.Request) typhon.Response {
+			return Respond(req, &apipb.Mixin{Name: "ok"}, http.StatusOK)
+		})
+	})
+	host := strings.TrimPrefix(base, "http://")
+
+	ctx, handling := otel.Tracer("test").Start(t.Context(), "POST /transfers")
+	if err := Get(ctx, base+"/accounts/a11ce000-0000-4000-8000-000000000001", &apipb.Mixin{}); err != nil {
+		t.Fatal(err)
+	}
+	handling.End()
+
+	client := spanNamed(t, exporter, "GET "+host)
+	server := spanNamed(t, exporter, "GET /accounts/:id")
+	trace := handling.SpanContext().TraceID()
+	if client.SpanContext.TraceID() != trace || server.SpanContext.TraceID() != trace {
+		t.Fatalf("spans in traces %s and %s, want both in the handler's trace %s", client.SpanContext.TraceID(), server.SpanContext.TraceID(), trace)
+	}
+	if client.Parent.SpanID() != handling.SpanContext().SpanID() || server.Parent.SpanID() != client.SpanContext.SpanID() {
+		t.Error("want handler → call → other service's server span, each under the one before")
+	}
+	a := attrs(client)
+	if client.SpanKind != oteltrace.SpanKindClient || a["http.request.method"].AsString() != "GET" ||
+		a["server.address"].AsString() != host || a["http.response.status_code"].AsInt64() != 200 || client.Status.Code == codes.Error {
+		t.Errorf("client span = %s %v %v, want a client span with method, server and status 200", client.SpanKind, client.Attributes, client.Status)
+	}
+	if strings.Contains(client.Name+attributeText(client), "a11ce000") {
+		t.Error("the client span carries the path's account ID; name it by method and service only")
+	}
+}
+
+func TestAFailedCallMarksItsSpan(t *testing.T) {
+	exporter := recordSpans(t)
+	base := otherService(t, func(r *typhon.Router) {
+		r.GET("/thing", func(req typhon.Request) typhon.Response {
+			return typhon.Response{Error: terrors.NotFound("thing", "no such thing", nil)}
+		})
+	})
+	down := httptest.NewServer(http.NotFoundHandler())
+	down.Close() // nothing listens there now
+
+	_ = Get(t.Context(), base+"/thing", &apipb.Mixin{})
+	_ = Get(t.Context(), down.URL+"/thing", &apipb.Mixin{})
+
+	refused := attrs(spanNamed(t, exporter, "GET "+strings.TrimPrefix(base, "http://")))
+	if refused["error.type"].AsString() != "not_found.thing" || refused["http.response.status_code"].AsInt64() != 404 {
+		t.Errorf("refused call = %v, want error.type not_found.thing and status 404", refused)
+	}
+	unreachable := spanNamed(t, exporter, "GET "+strings.TrimPrefix(down.URL, "http://"))
+	a := attrs(unreachable)
+	if _, hasStatus := a["http.response.status_code"]; unreachable.Status.Code != codes.Error || hasStatus {
+		t.Errorf("unreachable call = %v %v, want failed, with no status code (no response came back)", a, unreachable.Status)
+	}
 }
