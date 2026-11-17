@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+// The transaction service's API: moving money, and following a movement
+// until it's done. Each request is saved as a transfer before anything is
+// sent to the ledger, then posted to it, retried if the ledger can't be
+// reached, until it's completed or failed.
+//
+// It's internal, called by other services. Requests and responses are JSON,
+// using these field names (idempotency_key), or binary protobuf through
+// kit.Post. Both are strict about fields and enum values the service doesn't
+// know.
+//
+//   POST /transfers      CreateTransferRequest -> Transfer
+//   POST /deposits       CreateDepositRequest  -> Transfer
+//   GET  /transfers/:id  -> Transfer (deposits too)
+//
+// A request that breaks a rule before anything is saved is a 400 and saves
+// nothing. Once a transfer is saved, the answer is always the Transfer, and
+// its state is the truth:
+//   201 created: it was saved, and completed or failed, in this request
+//   202 accepted: it's pending; it will be finished in the background, so ask
+//     again with GET /transfers/:id (the Location header)
+//   200 ok: a retry with the same idempotency key, and the transfer is
+//     already completed or failed
+// A refusal by the ledger, such as insufficient funds, is a transfer with
+// state FAILED and a failure_reason, not an HTTP error.
+//
+// Errors are terrors. A bad request's code is the field it's about:
+// bad_request.idempotency_key, bad_request.from_account_id,
+// bad_request.to_account_id, bad_request.account_id (deposits),
+// bad_request.currency, bad_request.amount; and
+// precondition_failed.idempotency_key (the key was used for a different
+// transfer), not_found.transfer.
+package transaction.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/tinypell3ts/tiny-bank/proto/transaction/v1;transactionv1";
+
+// Moves money from one account to another.
+message CreateTransferRequest {
+  // Chosen by the caller, once per movement of money, and sent again
+  // unchanged on every retry. 1 to 100 characters: letters, digits and
+  // . _ : -. A retry gets the same transfer back; the same key for a
+  // different transfer is refused.
+  string idempotency_key = 1;
+  // UUIDs, lower-case with dashes, of two different accounts.
+  string from_account_id = 2;
+  string to_account_id = 3;
+  // The ISO 4217 code: GBP, EUR, USD or JPY.
+  string currency = 4;
+  // In the currency's minor unit (pence for GBP): 1 to 1000000000000.
+  // JSON writes it as a string ("300"), as proto3 JSON does for every 64-bit
+  // integer; a number is accepted too.
+  int64 amount = 5;
+}
+
+// Moves money into an account from outside the bank.
+message CreateDepositRequest {
+  // As in CreateTransferRequest.
+  string idempotency_key = 1;
+  // A UUID, lower-case with dashes.
+  string account_id = 2;
+  string currency = 3;
+  int64 amount = 4;
+}
+
+// A request to move money, and what has happened to it.
+message Transfer {
+  // A UUID, lower-case with dashes.
+  string id = 1;
+  string idempotency_key = 2;
+  TransferKind kind = 3;
+  // Empty for a deposit.
+  string from_account_id = 4;
+  string to_account_id = 5;
+  string currency = 6;
+  int64 amount = 7;
+  // Treat TRANSFER_STATE_UNSPECIFIED, or any value you don't recognise, as
+  // "not finished": ask again later, and never assume the money moved.
+  TransferState state = 8;
+  // The ledger's journal, once COMPLETED.
+  string journal_id = 9;
+  // Why the ledger refused it, once FAILED: its terror code, like
+  // precondition_failed.insufficient_funds.
+  string failure_reason = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+enum TransferKind {
+  TRANSFER_KIND_UNSPECIFIED = 0;
+  // From one account to another.
+  TRANSFER_KIND_TRANSFER = 1;
+  // Into an account from outside the bank.
+  TRANSFER_KIND_DEPOSIT = 2;
+}
+
+// Where a transfer is in its life. New states are added at the end.
+enum TransferState {
+  TRANSFER_STATE_UNSPECIFIED = 0;
+  // Saved, and not yet posted or refused by the ledger.
+  TRANSFER_STATE_PENDING = 1;
+  // The ledger posted it: the money moved. Final.
+  TRANSFER_STATE_COMPLETED = 2;
+  // The ledger refused it: no money moved. Final.
+  TRANSFER_STATE_FAILED = 3;
+}

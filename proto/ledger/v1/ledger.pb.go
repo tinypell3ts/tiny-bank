@@ -7,9 +7,11 @@
 // The ledger service's API: moving money between accounts, and reading
 // balances. The ledger is the one record of every movement of money.
 //
-// It's internal, called by other services. Requests are JSON, using these
-// field names (idempotency_key). Responses are JSON too, or binary protobuf
-// for a caller that sends Accept: application/protobuf.
+// It's internal, called by other services. Requests and responses are JSON,
+// using these field names (idempotency_key), or binary protobuf, as other
+// services send them through kit.Post (Content-Type and Accept:
+// application/protobuf). Both are strict about fields and enum values the
+// ledger doesn't know.
 //
 //   POST /journals              PostJournalRequest -> Journal
 //                               (201 with a Location header; 200 with the
@@ -32,9 +34,12 @@
 //     no record of it yet (on GET .../balance)
 //   not_found.journal
 //
-// A precondition_failed answer is final: retrying the same request gets the
-// same answer until something changes (the account receives money). If the
-// account service can't be reached, the answer is a 500 and no money moves.
+// An idempotency key gets one final answer. A refusal (bad_request.currency,
+// precondition_failed, not_found.account) is kept against the key like a
+// journal: retrying the same request gets the same refusal, even once it
+// would go through, so use a new key to try again. If the account service
+// can't be reached, the answer is a 500, no money moves, and nothing is kept,
+// so the same key can be retried.
 
 package ledgerv1
 

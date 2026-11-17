@@ -30,12 +30,12 @@ flowchart LR
 
 ## Current
 
-Three services, `hello`, `account` and `ledger` (each of the last two with its own Postgres), plus the monitoring stack and the Postgres operator, running on a local kind cluster:
+Four services, `hello`, `account`, `ledger` and `transaction` (each of the last three with its own Postgres), plus the monitoring stack and the Postgres operator, running on a local kind cluster:
 
 ```mermaid
 flowchart LR
     dev([Developer]) -->|make dev| tilt[Tilt]
-    tilt -->|build| img[hello, account, ledger images<br/>distroless, UID 65532]
+    tilt -->|build| img[hello, account, ledger, transaction images<br/>distroless, UID 65532]
     tilt -->|helm chart: deploy/charts/service| k8s
     subgraph k8s [kind cluster: kind-tiny-bank]
         svc[Service hello] --> pod[Pod hello<br/>probes /healthz, /readyz<br/>/metrics]
@@ -52,6 +52,10 @@ flowchart LR
         lpod -->|DATABASE_URL| ldb[(ledger-db<br/>CloudNativePG)]
         prom -->|scrapes| lpod
         lpod -->|kit.Get /accounts/id<br/>binary protobuf| asvc
+        tsvc[Service transaction] --> tpod[Pod transaction<br/>POST /transfers, /deposits<br/>GET /transfers/id<br/>finisher in background]
+        tpod -->|DATABASE_URL| tdb[(transaction-db<br/>CloudNativePG)]
+        prom -->|scrapes| tpod
+        tpod -->|kit.Post /journals<br/>binary protobuf| lsvc
         subgraph cnpgns [namespace: cnpg-system]
             cnpg[CloudNativePG operator]
         end
@@ -61,18 +65,21 @@ flowchart LR
     dev -->|localhost:8080 port-forward| pod
     dev -->|localhost:8081 port-forward| apod
     dev -->|localhost:8082 port-forward| lpod
+    dev -->|localhost:8083 port-forward| tpod
     cnpg -.runs.-> adb
     cnpg -.runs.-> ldb
+    cnpg -.runs.-> tdb
     dev -->|localhost:3000 Grafana, :9090 Prometheus| mon
 ```
 
 - **Image:** one shared `Dockerfile`, multi-stage, distroless and non-root.
 - **Cluster:** one-node kind cluster (`make cluster-up`).
-- **Deploy:** one shared Helm chart plus a small values file per service (`deploy/values/hello.yaml`, `account.yaml`, `ledger.yaml`). The chart also creates a `ServiceMonitor`, so Prometheus scrapes every service.
+- **Deploy:** one shared Helm chart plus a small values file per service (`deploy/values/hello.yaml`, `account.yaml`, `ledger.yaml`, `transaction.yaml`). The chart also creates a `ServiceMonitor`, so Prometheus scrapes every service.
 - **Dev loop:** Tilt rebuilds and redeploys on save.
 - **Monitoring:** kube-prometheus-stack (Prometheus Operator, Prometheus, Grafana, kube-state-metrics) in the `monitoring` namespace, installed by `make monitoring`. See [observability.md](observability.md).
 - **Postgres:** the [CloudNativePG](https://cloudnative-pg.io) operator in `cnpg-system`, installed by `make cnpg`. It turns each `Cluster` object into a running Postgres, with its users, passwords, storage and failover. A service turns on `database.enabled` in its values file, and the shared chart gives it its own Postgres `Cluster` (`<name>-db`), with its connection string passed in as `DATABASE_URL`.
 - **Account service:** `cmd/account` plus `services/account`. It connects to `account-db` and applies its migrations before serving, and offers `POST /accounts` and `GET /accounts/:id` on Typhon, as JSON following its contract, `proto/account/v1`. It's internal only (ClusterIP, no sign-in) until the edge gateway.
 - **Ledger service:** `cmd/ledger` plus `services/ledger`, with its own `ledger-db`. It records every movement of money as a double-entry journal whose entries add up to zero, locking the accounts it touches so balances can't race, and takes an idempotency key so a retried request moves money once. Before moving money it checks every customer account with the account service (`ACCOUNT_URL`, `http://account` on the cluster), the first call between services: binary protobuf through `kit.Get`, with the request ID passed on. It offers `POST /journals`, `GET /journals/:id` and `GET /accounts/:id/balance`, following `proto/ledger/v1`. Internal only, like the account service.
+- **Transaction service:** `cmd/transaction` plus `services/transaction`, with its own `transaction-db`. It saves each request to move money as a transfer (pending, then completed or failed) before posting its journal to the ledger (`LEDGER_URL`) with `kit.Post`, keyed by the transfer's own ID, so retries move money once. A background finisher on every pod retries what requests left pending ([ADR-0010](adr/0010-move-money-as-transfers-saved-before-the-ledger-is-called.md)). It offers `POST /transfers`, `POST /deposits` and `GET /transfers/:id`, following `proto/transaction/v1`. Internal only.
 
 See [ADR-0002](adr/0002-run-everything-in-docker-on-kubernetes.md) for why we run on Kubernetes, [ADR-0003](adr/0003-measure-services-with-prometheus-red-metrics.md) for how we measure services, and [deploy/AGENTS.md](../deploy/AGENTS.md) for the rules.

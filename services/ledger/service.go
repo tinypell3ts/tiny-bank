@@ -10,6 +10,7 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 	accountv1 "github.com/tinypell3ts/tiny-bank/proto/account/v1"
@@ -34,10 +35,13 @@ func NewService(store *Store, accounts Accounts, reg prometheus.Registerer) *Ser
 // and hold req's currency. Funding accounts are the ledger's own, so they
 // aren't checked.
 //
-// A retry, a request whose idempotency key is already used, gets the journal
-// posted the first time without any checks. Its money has already moved, so
-// refusing it now (because an account has closed since, say) would tell the
-// caller it hadn't.
+// An idempotency key gets one final answer. A retry, a request whose key is
+// already used, gets the journal posted the first time without any checks:
+// its money has already moved, so refusing it now (because an account has
+// closed since, say) would tell the caller it hadn't. A retry of a refused
+// request gets the same refusal, even if it would go through now: its caller
+// was told "refused" and may have acted on it, so the key can never move
+// money afterwards.
 //
 // The checks run before Store.Post takes any locks or opens a transaction, so
 // a slow account service never holds up other posts on the same accounts.
@@ -53,27 +57,28 @@ func (s *Service) CountRefusal(currency money.Currency, err error) {
 	s.metrics.refused(currency, err)
 }
 
-// checkAndPost validates req, answers a retry with its first journal, checks
+// checkAndPost validates req, answers a repeat with its key's answer, checks
 // the accounts, and posts. Post wraps it so every return is counted.
 func (s *Service) checkAndPost(ctx context.Context, req NewJournal) (Journal, bool, error) {
 	req, err := req.Validate()
 	if err != nil {
 		return Journal{}, false, fmt.Errorf("post journal: %w", err)
 	}
-	j, found, err := s.posted(ctx, req)
-	if err != nil {
-		return Journal{}, false, fmt.Errorf("post journal: %w", err)
-	}
-	if found {
-		return j, false, nil
+	if j, found, err := answered(ctx, s.pool, req); found || err != nil {
+		return j, false, wrap(err)
 	}
 	if err := checkAccounts(ctx, s.accounts, req.Entries); err != nil {
-		// Another request with the same key may have posted while these checks
-		// ran: it passed them, and this one's lookup timed out, say. Its money
-		// has moved, so this request is a retry of it and gets its journal,
-		// not an error that would say nothing moved.
-		if j, found, lookupErr := s.posted(ctx, req); lookupErr == nil && found {
-			return j, false, nil
+		if _, kept := keptRefusal(err); kept {
+			// Refused for good: the key keeps this answer (unless another
+			// request with it was answered meanwhile, which wins).
+			return s.refuse(ctx, req, err)
+		}
+		// Another request with the same key may have been answered while
+		// these checks ran: it passed them, and this one's lookup timed out,
+		// say. If its money moved, this request is a retry of it and gets its
+		// journal, not an error that would say nothing moved.
+		if j, found, answerErr := answered(ctx, s.pool, req); found {
+			return j, false, wrap(answerErr)
 		}
 		return Journal{}, false, fmt.Errorf("post journal: %w", err)
 	}
@@ -88,7 +93,7 @@ func checkAccounts(ctx context.Context, accounts Accounts, entries []Entry) erro
 	errs := make([]error, len(entries))
 	var wg sync.WaitGroup
 	for i, e := range entries {
-		if isFunding(e.AccountID) {
+		if funding.Is(e.AccountID) {
 			continue
 		}
 		wg.Go(func() { errs[i] = checkAccount(ctx, accounts, e) })
@@ -114,15 +119,6 @@ func checkAccount(ctx context.Context, accounts Accounts, e Entry) error {
 		return errWrongCurrency(e.AccountID, info.Currency)
 	}
 	return nil
-}
-
-func isFunding(id uuid.UUID) bool {
-	for _, f := range fundingAccounts {
-		if f == id {
-			return true
-		}
-	}
-	return false
 }
 
 // Accounts is what the ledger needs to know about customer accounts. The

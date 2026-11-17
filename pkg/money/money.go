@@ -22,6 +22,14 @@ var (
 	ErrOverflow = errors.New("amount overflow")
 )
 
+// MaxAmount is the largest single movement of money tiny-bank accepts, in
+// minor units: 10^12, £10 billion. The ledger refuses a larger entry, and the
+// transaction service a larger transfer before saving it. Without a cap, a
+// few huge journals could take a balance near the int64 limit, after which
+// every post to that account would overflow; with it, that takes millions.
+// The services' tables repeat it in CHECK constraints, as a backstop.
+const MaxAmount = 1_000_000_000_000
+
 // Money is an amount in one currency. It's a small value type: copy it freely
 // and compare it with ==.
 //

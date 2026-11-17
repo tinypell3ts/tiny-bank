@@ -8,6 +8,8 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 )
 
 func TestOutcomeOf(t *testing.T) {
@@ -23,6 +25,7 @@ func TestOutcomeOf(t *testing.T) {
 		{"a bad journal", false, fmt.Errorf("post journal: %w", invalid("entries", "x")), "refused", "bad_request.entries"},
 		{"an account that doesn't exist", false, errNoSuchAccount(alice), "refused", "not_found.account"},
 		{"the account service failing", false, terrors.NewInternalWithCause(errors.New("down"), "x", nil, "account_service"), "failed", ""},
+		{"the caller's deadline passing", false, terrors.Timeout("deadline", "x", nil), "failed", ""},
 		{"a plain error", false, errors.New("database gone"), "failed", ""},
 	}
 	for _, tt := range tests {
@@ -69,7 +72,7 @@ func TestMetricsStartAtZero(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := len(fundingAccounts) // moved: one per currency
+		want := len(funding.All()) // moved: one per currency
 		if name == "ledger_journals_total" {
 			want *= 3 // posted, retried and failed
 		}

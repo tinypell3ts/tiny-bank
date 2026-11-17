@@ -66,6 +66,16 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 
   Every label has a fixed set of values, never an account ID or an amount. Every refusal is counted once, including those the HTTP handler turns away before the ledger's rules run (invalid JSON, an unsupported currency, a malformed account ID), with currency `unknown` when there isn't a supported one yet. `reason` is a refusal's terror code, which is always one of the ledger's or `kit.Decode`'s own constants: none is built from what a caller sent, and the account service's codes are turned into the ledger's before they could reach a label.
 
+  The transaction service's ([metrics.go](../services/transaction/metrics.go)):
+
+  | Metric | Type | Labels | Answers |
+  |---|---|---|---|
+  | `transaction_ledger_posts_total` | counter | `by` (`request`, `finisher`), `outcome` (`posted`, `refused`, `key_reused`, `unsure`), `reason` (a refusal's terror code) | How often the ledger answers, refuses or leaves us unsure, and how much is left to the finisher |
+  | `transaction_pending_transfers` | gauge | none | How many transfers are waiting for the ledger |
+  | `transaction_oldest_pending_seconds` | gauge | none | How long the oldest has waited: the sign that transfers are stuck |
+
+  The finisher sets both gauges each second, on every pod, so read them with `max()`. `reason` is one of the ledger's own fixed codes.
+
 - **Following one request across services:** `kit.Get` passes the request ID on, so the same `request_id` is in the ledger's log lines and in the account service's lines for its checks. Each journal stores the request ID that posted it, so the audit trail leads from a movement of money to the logs of the request that made it.
 
 ### On the cluster
@@ -102,5 +112,7 @@ It leaves out Kubernetes probes (`/healthz`, `/readyz`) and Prometheus scrapes (
 
 [tiny-bank / Ledger](http://localhost:3000/d/tiny-bank-ledger) shows what happens to money: journals posted per second, the share refused (the caller's fault) and failed (ours), posts by outcome, refusals by reason, and money moved by currency: in each interval, and in total for the time range. "Money moved" is volume (each journal's positive entries), because the net is always zero. Every series the ledger can name in advance (money moved, and posts posted, retried or failed, for every currency) starts at 0, so Prometheus sees the first journal as an increase. Refusal series appear on each reason's first refusal, so the dashboard misses that first one.
 
-The dashboards are JSON files in git ([services](../deploy/monitoring/dashboards/tiny-bank-services.json), [ledger](../deploy/monitoring/dashboards/tiny-bank-ledger.json)). `make dashboards` puts it in a ConfigMap labelled `grafana_dashboard=1`, and Grafana's sidecar container loads it within seconds. Under `make dev`, Tilt does this every time the file is saved.
+[tiny-bank / Transactions](http://localhost:3000/d/tiny-bank-transaction) shows whether transfers get finished: how many are pending and the oldest one's age (amber after a minute, red after five), ledger posts by outcome and by who tried, and refusals by reason.
+
+The dashboards are JSON files in git ([services](../deploy/monitoring/dashboards/tiny-bank-services.json), [ledger](../deploy/monitoring/dashboards/tiny-bank-ledger.json), [transactions](../deploy/monitoring/dashboards/tiny-bank-transaction.json)). `make dashboards` puts it in a ConfigMap labelled `grafana_dashboard=1`, and Grafana's sidecar container loads it within seconds. Under `make dev`, Tilt does this every time the file is saved.
 

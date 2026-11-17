@@ -97,3 +97,12 @@ func TestRespondSendsBinaryWhenAskedFor(t *testing.T) {
 		}
 	}
 }
+
+func TestRespondAt(t *testing.T) {
+	rec := respond(t, func(req typhon.Request) typhon.Response {
+		return RespondAt(req, &typepb.Type{Name: "Ada"}, http.StatusAccepted, "/things/1")
+	})
+	if rec.Code != http.StatusAccepted || rec.Header().Get("Location") != "/things/1" {
+		t.Errorf("status %d, Location %q, want 202 /things/1", rec.Code, rec.Header().Get("Location"))
+	}
+}
