@@ -26,6 +26,8 @@ jobs:
           HEAD_REF: ${{ github.head_ref }} # via env, never inline, to avoid script injection
         run: scripts/check-branch-name.sh "$HEAD_REF"
 
+  # Lint and vet only: the integration job runs every unit test too, as
+  # -tags=integration adds files without leaving any out.
   go:
     runs-on: ubuntu-latest
     steps:
@@ -33,6 +35,19 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false # setup-go's cache has one key for every job, so whichever job saves first wins; see below
+      # This job's own Go cache: modules and compiled packages. PRs restore the
+      # newest one main saved, and only main saves, so PR pushes don't fill the
+      # repo's cache space. Go recompiles only what changed since.
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ github.job }}-${{ hashFiles('go.sum') }}-
+            go-${{ github.job }}-
       - name: gofmt
         run: make fmt-check
       - name: go vet
@@ -41,8 +56,13 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.15.0 # keep in step with local `golangci-lint version`; must be built with Go >= go.mod's version
-      - name: go test
-        run: make test
+      - uses: actions/cache/save@v6
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   proto:
     runs-on: ubuntu-latest
@@ -53,8 +73,11 @@ jobs:
       - uses: actions/setup-go@v6 # make proto-check generates with the protoc-gen-go pinned in go.mod
         with:
           go-version-file: go.mod
-      - name: Install buf
-        run: go install github.com/bufbuild/buf/cmd/buf@v1.75.0 # keep in step with local `buf --version`
+      - name: Install buf # downloads the release binary, rather than compiling buf from source
+        uses: bufbuild/buf-action@v1
+        with:
+          version: 1.75.0 # keep in step with local `buf --version`
+          setup_only: true # just install buf: make proto-check runs the checks
       - name: Check contracts (format, lint, breaking changes, generated Go up to date)
         run: make proto-check PROTO_AGAINST=origin/main
 
@@ -65,8 +88,25 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Integration tests (real Postgres in Docker)
+          cache: false
+      - uses: actions/cache/restore@v6 # this job's own Go cache, as in the go job
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ github.job }}-${{ hashFiles('go.sum') }}-
+            go-${{ github.job }}-
+      - name: Unit and integration tests (real Postgres in Docker)
         run: make test-integration
+      - uses: actions/cache/save@v6
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ github.job }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   docker:
     runs-on: ubuntu-latest
