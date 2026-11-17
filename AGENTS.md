@@ -74,6 +74,7 @@ Current:
 ├── cmd/ledger/          # ledger service binary: its migrations and routes, run by db.Run
 ├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
 ├── services/ledger/     # ledger service code: double-entry journals, balances under row locks, idempotency keys, migrations/*.sql
+├── services/transaction/ # transaction service code: transfers and deposits as a state machine (pending, then completed or failed), migrations/*.sql
 ├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), Handler (Typhon router + shared filters + probes), Decode/Respond (protobuf as JSON), Secret
 │   └── kittest/         # Conformance: the checks every service's handler must pass (health, request IDs, errors, metrics); ConformanceOf runs them on a service's routes; Start runs a service for integration tests
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED metrics (Track)
