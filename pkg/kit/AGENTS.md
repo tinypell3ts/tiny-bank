@@ -16,7 +16,7 @@ pkg/kit/
 ├── ready.go      # readyz: readiness, with an optional dependency check under a 2s timeout
 ├── decode.go     # Decode: a JSON body into a proto message, strictly, every failure a coded 400
 ├── respond.go    # Respond, RespondCreated: a proto message as JSON with the proto field names, or binary if the caller asks
-├── client.go     # Get: call another service, binary protobuf, request ID passed on, read leniently
+├── client.go     # Get: call another service, binary protobuf, request ID passed on, read leniently, on a pool of at most 100 connections per service
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
 ├── uuid.go       # ParseUUID: caller text to a UUID, canonical form only, so one thing has one URL
 └── kittest/      # Conformance (and ConformanceOf, on a service's routes): the checks every service's handler must pass; Start and Get run a real service in integration tests

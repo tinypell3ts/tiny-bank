@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"time"
 
@@ -21,10 +22,32 @@ const (
 	// maxResponseBytes caps a response body read from another service, so a
 	// misbehaving one can't make its caller use up memory.
 	maxResponseBytes = 1 << 20
+	// maxConnsPerHost is the most connections open to one other service at
+	// once, and how many are kept open between calls to be used again.
+	maxConnsPerHost = 100
 )
 
+// transport is the connection pool for calls to other services. Typhon's
+// default keeps only 10 idle connections to a host and opens as many as are
+// asked for. Under load that churns: each burst dials hundreds of new
+// connections and closes most of them, and every closed one holds a local
+// port for a minute (TIME_WAIT), until the pod has none left and calls fail
+// with "cannot assign requested address". A load test of the ledger hit
+// exactly that. This pool keeps up to maxConnsPerHost open and reuses them;
+// a call beyond that waits for a free connection (within callTimeout)
+// instead of dialling another.
+var transport = &http.Transport{
+	DialContext:           (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	MaxConnsPerHost:       maxConnsPerHost,
+	MaxIdleConnsPerHost:   maxConnsPerHost,
+	MaxIdleConns:          0, // no limit across hosts: MaxIdleConnsPerHost bounds each
+	IdleConnTimeout:       90 * time.Second,
+	ResponseHeaderTimeout: callTimeout,
+}
+
 // client sends requests to other tiny-bank services. It's Typhon's HTTP
-// client with these filters, innermost first:
+// client, on transport's connection pool, with these filters, innermost
+// first:
 //
 //   - capBody limits every response body to maxResponseBytes+1, before
 //     anything reads it. ErrorFilter reads an error response's whole body
@@ -39,7 +62,7 @@ const (
 //     TestGetEndsWithTheCallersContext fails without it.
 //   - forwardRequestID passes the current request's ID on, so one request's
 //     log lines can be followed across every service it touches
-var client = typhon.Client.
+var client = typhon.HttpService(transport).
 	Filter(capBody).
 	Filter(typhon.ErrorFilter).
 	Filter(typhon.ErrorFilter).
