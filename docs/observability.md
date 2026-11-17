@@ -19,7 +19,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard ✅ |
 | 5.5 | Shared Typhon filters in `pkg/kit` for request IDs, access logs and RED metrics, applied to every service ✅ |
 | 7 | Request ID passed on to downstream services by `kit.Get`, so one ID follows a request across services, and stored on each journal; ledger business metrics and dashboard ✅ |
-| 8 | OpenTelemetry tracing across services |
+| 8 | Jaeger on the cluster; OpenTelemetry tracing across services |
 | 10–11 | Trace context in Kafka headers, outbox backlog and consumer lag metrics |
 | 13 | Dashboards and alert rules |
 
@@ -88,6 +88,7 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 | Prometheus | Scrapes `/metrics` every 30s and stores 1 day of data | [localhost:9090](http://localhost:9090) |
 | Grafana | Charts. Comes with ~20 Kubernetes dashboards. No login locally | [localhost:3000](http://localhost:3000) |
 | kube-state-metrics | Kubernetes object state: pod restarts, replicas, resource requests | |
+| Jaeger | Receives traces over OTLP (`http://jaeger.jaeger:4318` inside the cluster) and shows them. In memory, lost on restart. Installed by `make jaeger`, in namespace `jaeger`. No login locally | [localhost:16686](http://localhost:16686) |
 
 Turned off for a one-node dev cluster:
 - Alertmanager, until alert rules arrive in Phase 13.
