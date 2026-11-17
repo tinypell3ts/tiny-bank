@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,13 +19,17 @@ func TestValidate(t *testing.T) {
 		t.Fatalf("a good config: %v", err)
 	}
 	bad := map[string]func(*config){
-		"no rate":             func(c *config) { c.rate = 0 },
-		"no duration":         func(c *config) { c.duration = 0 },
-		"one account":         func(c *config) { c.accounts = 1 },
-		"no funding":          func(c *config) { c.fund = 0 },
-		"no amount":           func(c *config) { c.maxAmount = 0 },
-		"retries above 1":     func(c *config) { c.retryShare = 1.5 },
-		"no requests at once": func(c *config) { c.maxInFlight = 0 },
+		"no rate":                               func(c *config) { c.rate = 0 },
+		"no duration":                           func(c *config) { c.duration = 0 },
+		"one account":                           func(c *config) { c.accounts = 1 },
+		"no funding":                            func(c *config) { c.fund = 0 },
+		"no amount":                             func(c *config) { c.maxAmount = 0 },
+		"retries above 1":                       func(c *config) { c.retryShare = 1.5 },
+		"no requests at once":                   func(c *config) { c.maxInFlight = 0 },
+		"rate too fast":                         func(c *config) { c.rate = maxRate + 1 },
+		"a rate that rounds to a zero interval": func(c *config) { c.rate = 2e9 },
+		"rate not a number":                     func(c *config) { c.rate = math.NaN() },
+		"rate infinite":                         func(c *config) { c.rate = math.Inf(1) },
 	}
 	for name, change := range bad {
 		c := good
@@ -57,13 +62,57 @@ func TestGeneratorMakesValidTransfers(t *testing.T) {
 	}
 }
 
-func TestGeneratorRetriesResendEarlierJournals(t *testing.T) {
-	g := newGenerator([]string{"a", "b"}, 500, 1, "run") // after the first, every request is a retry
-	first := g.next()
+func TestGeneratorRetriesOnlyPostedJournals(t *testing.T) {
+	g := newGenerator([]string{"a", "b"}, 500, 1, "run") // every request is a retry once one has been posted
+	refused := g.next()
+	if again := g.next(); again.IdempotencyKey == refused.IdempotencyKey {
+		t.Fatal("resent a journal that was never posted: the ledger forgets a refused key, so this could move money")
+	}
+	posted := g.next()
+	g.posted(posted)
 	for range 50 {
-		if again := g.next(); again.IdempotencyKey != first.IdempotencyKey || again.Entries[1].Amount != first.Entries[1].Amount {
-			t.Fatalf("retry = %+v, want the first journal again, unchanged", again)
+		if again := g.next(); again.IdempotencyKey != posted.IdempotencyKey || again.Entries[1].Amount != posted.Entries[1].Amount {
+			t.Fatalf("retry = %+v, want the posted journal again, unchanged", again)
 		}
+	}
+}
+
+func TestGeneratorRetryPoolStaysBounded(t *testing.T) {
+	g := newGenerator([]string{"a", "b"}, 500, 0, "run")
+	var last journal
+	for range 3 * retryPoolSize {
+		last = g.next()
+		g.posted(last)
+	}
+	if g.poolLen != retryPoolSize {
+		t.Fatalf("pool holds %d journals, want at most %d", g.poolLen, retryPoolSize)
+	}
+	found := false
+	for _, j := range g.pool {
+		found = found || j.IdempotencyKey == last.IdempotencyKey
+	}
+	if !found {
+		t.Error("the newest posted journal isn't in the pool: it should replace the oldest")
+	}
+}
+
+func TestStatsKeepABoundedFairSample(t *testing.T) {
+	s := &stats{}
+	n := 3 * latencySamples
+	for i := range n {
+		s.add(http.StatusCreated, time.Duration(i+1)*time.Microsecond, nil)
+	}
+	if len(s.latencies) != latencySamples || s.answered != n {
+		t.Fatalf("kept %d latencies of %d answered; want %d kept", len(s.latencies), s.answered, latencySamples)
+	}
+	// The latencies rose steadily, so a fair sample's median is near the
+	// middle of the whole run, not near its start.
+	mid := time.Duration(n/2) * time.Microsecond
+	if got := percentile(s.latencies, 50); got < mid*9/10 || got > mid*11/10 {
+		t.Errorf("sampled p50 = %s, want about %s", got, mid)
+	}
+	if !strings.Contains(s.summary(time.Second), fmt.Sprintf("Sent %d requests", n)) {
+		t.Error("the summary must count every request, not only the sampled ones")
 	}
 }
 
@@ -180,5 +229,65 @@ func TestRunFailsClearlyWhenTheServicesArentRunning(t *testing.T) {
 	err := run(t.Context(), cfg, http.DefaultClient, &strings.Builder{})
 	if err == nil || !strings.Contains(err.Error(), "is make dev running?") {
 		t.Fatalf("err = %v, want a hint to start make dev", err)
+	}
+}
+
+// TestRunRetriesNeverResendARefusedKey: with every post refused, nothing may
+// be resent. A refused key isn't kept by the ledger, so a resend could move
+// money.
+func TestRunRetriesNeverResendARefusedKey(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]int{}
+	acc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprintf("a0000000-0000-4000-8000-%012d", time.Now().UnixNano()%1e12)})
+	}))
+	led := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var j journal
+		_ = json.NewDecoder(r.Body).Decode(&j)
+		if strings.HasPrefix(j.IdempotencyKey, "fund-") {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		mu.Lock()
+		seen[j.IdempotencyKey]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusPreconditionFailed) // insufficient funds, every time
+	}))
+	t.Cleanup(acc.Close)
+	t.Cleanup(led.Close)
+
+	cfg := config{rate: 200, duration: 300 * time.Millisecond, accounts: 2, fund: 1, maxAmount: 100,
+		retryShare: 0.9, maxInFlight: 10, accountURL: acc.URL, ledgerURL: led.URL}
+	if err := run(t.Context(), cfg, http.DefaultClient, &strings.Builder{}); err != nil {
+		t.Fatal(err)
+	}
+	for key, n := range seen {
+		if n > 1 {
+			t.Fatalf("refused key %s was sent %d times", key, n)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no journals were sent")
+	}
+}
+
+// TestSetupGivesUpOnAServiceThatNeverAnswers: setup requests have a deadline
+// too, so a hung service stops the tool with an error instead of for ever.
+func TestSetupGivesUpOnAServiceThatNeverAnswers(t *testing.T) {
+	old := requestTimeout
+	requestTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { requestTimeout = old })
+	hang := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hang }))
+	t.Cleanup(func() { close(hang); srv.Close() })
+
+	cfg := config{rate: 1, duration: time.Second, accounts: 2, fund: 1, maxAmount: 1, maxInFlight: 1, accountURL: srv.URL, ledgerURL: srv.URL}
+	start := time.Now()
+	if err := run(t.Context(), cfg, http.DefaultClient, &strings.Builder{}); err == nil {
+		t.Fatal("setup against a hung service succeeded")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("setup took %v to give up, want about the %v request timeout", took, requestTimeout)
 	}
 }

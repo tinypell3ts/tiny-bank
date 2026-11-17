@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"os"
@@ -35,6 +36,23 @@ import (
 	"syscall"
 	"time"
 )
+
+const (
+	// maxRate is the most journals a second it will try. A ticker much faster
+	// than this mostly spins, using a CPU core that the services under test
+	// need, and at 1e9 a second the tick interval rounds to zero.
+	maxRate = 50_000
+	// retryPoolSize is how many recently posted journals retries pick from,
+	// and latencySamples how many latencies the percentiles are worked out
+	// from. Both are fixed, so memory stays flat however long the run.
+	retryPoolSize  = 1000
+	latencySamples = 100_000
+)
+
+// requestTimeout bounds every request, during setup and the run, so a
+// service that accepts a request and never answers can't stall the tool. A
+// variable only so tests can shorten it.
+var requestTimeout = 10 * time.Second
 
 // gbpFunding is the ledger's GBP funding account, where money from outside
 // the bank comes from (ledger.FundingAccount).
@@ -76,8 +94,10 @@ func main() {
 
 func (c config) validate() error {
 	switch {
-	case c.rate <= 0:
-		return errors.New("-rate must be more than 0")
+	case math.IsNaN(c.rate) || math.IsInf(c.rate, 0) || c.rate <= 0:
+		return errors.New("-rate must be a number more than 0")
+	case c.rate > maxRate:
+		return fmt.Errorf("-rate must be at most %d a second: a faster ticker mostly spins, using CPU the services need", maxRate)
 	case c.duration <= 0:
 		return errors.New("-duration must be more than 0")
 	case c.accounts < 2:
@@ -113,8 +133,11 @@ func run(ctx context.Context, cfg config, client *http.Client, out io.Writer) er
 	stats := &stats{}
 	start := time.Now()
 	load(ctx, cfg, func(ctx context.Context) {
-		body := gen.next()
-		status, took, err := postJSON(ctx, client, cfg.ledgerURL+"/journals", body)
+		j := gen.next()
+		status, took, err := postJSON(ctx, client, cfg.ledgerURL+"/journals", j)
+		if err == nil && status == http.StatusCreated {
+			gen.posted(j) // only journals that moved money can be retried
+		}
 		stats.add(status, took, err)
 	}, stats)
 
@@ -145,10 +168,8 @@ func load(ctx context.Context, cfg config, post func(context.Context), s *stats)
 				wg.Go(func() {
 					defer func() { <-slots }()
 					// A request already sent finishes even if the run ends, so
-					// its answer is counted. It gets its own short deadline.
-					reqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-					defer cancel()
-					post(reqCtx)
+					// its answer is counted. postJSONBody gives it a deadline.
+					post(context.WithoutCancel(ctx))
 				})
 			default:
 				s.skip()
@@ -210,7 +231,7 @@ func transfer(key, from, to string, pence int64) journal {
 }
 
 // generator makes the journals to post: random transfers between two
-// different accounts, and now and then a resend of an earlier one.
+// different accounts, and now and then a retry of one already posted.
 type generator struct {
 	mu         sync.Mutex
 	accounts   []string
@@ -218,7 +239,13 @@ type generator struct {
 	retryShare float64
 	runID      string
 	n          int
-	sent       []journal // every new journal so far, for retries to pick from
+	// pool holds the last retryPoolSize journals that were posted (a 201),
+	// as a ring: next overwrites the oldest. Only posted ones, because the
+	// ledger doesn't keep a refused request's key, so resending a refused
+	// one could move money, which is not what a retry does.
+	pool     [retryPoolSize]journal
+	poolLen  int
+	poolNext int
 }
 
 func newGenerator(accounts []string, maxAmount int64, retryShare float64, runID string) *generator {
@@ -228,8 +255,8 @@ func newGenerator(accounts []string, maxAmount int64, retryShare float64, runID 
 func (g *generator) next() journal {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if len(g.sent) > 0 && float64(randN(1_000_000)) < g.retryShare*1_000_000 {
-		return g.sent[randN(len(g.sent))] // the same request again: a retry
+	if g.poolLen > 0 && float64(randN(1_000_000)) < g.retryShare*1_000_000 {
+		return g.pool[randN(g.poolLen)] // the same request again: a retry
 	}
 	from := randN(len(g.accounts))
 	to := randN(len(g.accounts) - 1)
@@ -237,9 +264,17 @@ func (g *generator) next() journal {
 		to++ // never the same account twice in one journal
 	}
 	g.n++
-	j := transfer(fmt.Sprintf("load-%s-%d", g.runID, g.n), g.accounts[from], g.accounts[to], 1+int64(randN(int(g.maxAmount))))
-	g.sent = append(g.sent, j)
-	return j
+	return transfer(fmt.Sprintf("load-%s-%d", g.runID, g.n), g.accounts[from], g.accounts[to], 1+int64(randN(int(g.maxAmount))))
+}
+
+// posted adds j, which the ledger has just posted, to the journals retries
+// pick from.
+func (g *generator) posted(j journal) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pool[g.poolNext] = j
+	g.poolNext = (g.poolNext + 1) % retryPoolSize
+	g.poolLen = min(g.poolLen+1, retryPoolSize)
 }
 
 // randN returns a random int from 0 to n-1. It uses crypto/rand, which is as
@@ -259,6 +294,8 @@ func postJSON(ctx context.Context, client *http.Client, url string, v any) (stat
 }
 
 func postJSONBody(ctx context.Context, client *http.Client, url string, v any) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	b, err := json.Marshal(v)
 	if err != nil {
 		return 0, nil, err
@@ -279,10 +316,15 @@ func postJSONBody(ctx context.Context, client *http.Client, url string, v any) (
 
 // stats collects what happened to every request.
 type stats struct {
-	mu        sync.Mutex
-	byStatus  map[int]int
-	errors    int
-	skipped   int
+	mu       sync.Mutex
+	byStatus map[int]int
+	answered int
+	errors   int
+	skipped  int
+	// latencies is a fair sample of at most latencySamples answered
+	// requests' latencies (reservoir sampling): every request has the same
+	// chance of being in it, however long the run, so the percentiles stay
+	// right while memory stays flat.
 	latencies []time.Duration
 }
 
@@ -297,7 +339,12 @@ func (s *stats) add(status int, took time.Duration, err error) {
 		s.byStatus = map[int]int{}
 	}
 	s.byStatus[status]++
-	s.latencies = append(s.latencies, took)
+	s.answered++
+	if len(s.latencies) < latencySamples {
+		s.latencies = append(s.latencies, took)
+	} else if i := randN(s.answered); i < latencySamples {
+		s.latencies[i] = took // keep this one in place of a random earlier one
+	}
 }
 
 func (s *stats) skip() {
@@ -311,8 +358,7 @@ func (s *stats) summary(elapsed time.Duration) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var b strings.Builder
-	answered := len(s.latencies)
-	sent := answered + s.errors
+	sent := s.answered + s.errors
 	fmt.Fprintf(&b, "\nSent %d requests in %s: %.1f a second.\n", sent, elapsed.Round(time.Millisecond), float64(sent)/elapsed.Seconds())
 	rows := []struct {
 		label string
@@ -329,7 +375,7 @@ func (s *stats) summary(elapsed time.Duration) string {
 	for _, r := range rows {
 		fmt.Fprintf(&b, "  %-50s %d\n", r.label, r.n)
 	}
-	if answered > 0 {
+	if s.answered > 0 {
 		fmt.Fprintf(&b, "Latency: p50 %s, p95 %s, p99 %s\n",
 			percentile(s.latencies, 50), percentile(s.latencies, 95), percentile(s.latencies, 99))
 	}
