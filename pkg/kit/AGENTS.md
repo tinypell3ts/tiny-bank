@@ -17,10 +17,10 @@ pkg/kit/
 ├── ready.go      # readyz: readiness, with an optional dependency check under a 2s timeout
 ├── decode.go     # Decode: a JSON or binary protobuf body into a proto message, strictly, every failure a coded 400
 ├── respond.go    # Respond, RespondCreated, RespondAt (with a Location): a proto message as JSON with the proto field names, or binary if the caller asks
-├── client.go     # Get and Post: call another service, binary protobuf, request ID passed on, read leniently, on a pool of at most 100 connections per service
+├── client.go     # Get and Post: call another service, binary protobuf, request ID and trace passed on, read leniently, on a pool of at most 100 connections per service
 ├── requestid.go  # RequestIDHeader, RequestIDFrom, which caller IDs are safe to reuse
 ├── idempotency.go # CheckIdempotencyKey: the one set of rules for a caller's idempotency key, shared by every service that takes one
-├── tracing.go    # tracingFilter: a server span per request, continuing the caller's traceparent; routeOf, shared with the metrics
+├── tracing.go    # tracingFilter: a server span per request, continuing the caller's traceparent; client spans for Get and Post, and forwardTrace; routeOf, shared with the metrics
 ├── deadline.go   # the caller's deadline (X-Request-Timeout), applied by Handler and passed on by Get and Post, minus a margin per hop
 ├── refusal.go    # Refusal: is this terror a refusal for good (a 4xx), or worth retrying? One answer for every service
 ├── serviceurl.go # ServiceURL: another service's base URL from a setting, checked at startup
