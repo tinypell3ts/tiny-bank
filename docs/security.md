@@ -73,4 +73,5 @@ Each gap is known and has a plan. A change must not make one worse in the meanti
 | A revealed secret is an ordinary string again | Code that puts the value from `Reveal()`, or `string(s)`, into an error or log leaks it | Review: each `Reveal()` call is checked ([ADR-0008](adr/0008-stop-secrets-where-they-enter.md)) |
 | No TLS between services, or to Postgres | Traffic inside the local cluster is readable by anything on it | Not planned for the local cluster |
 | No automated check for known-vulnerable dependencies (such as `govulncheck`) | A vulnerable dependency could go unnoticed | Not planned yet |
+| Local Jaeger UI has no login | Anyone with access to the developer's machine can read traces (once services send them: route names, timings, errors; never personal data) | Local only, by design: a `ClusterIP` Service, reachable only through `kubectl port-forward` on localhost |
 | Local Grafana lets anyone in as admin | Anyone with access to the developer's machine can change dashboards | Local only, by design: reachable only through `kubectl port-forward` |

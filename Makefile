@@ -15,6 +15,11 @@ MONITORING_CHART_VERSION := 93.2.2
 CNPG_CHART         := oci://ghcr.io/cloudnative-pg/charts/cloudnative-pg
 CNPG_CHART_VERSION := 0.29.1
 
+# Jaeger v2 (all-in-one, in memory): receives traces over OTLP and shows them.
+# Its chart isn't published as OCI, so it comes from its Helm repository.
+JAEGER_CHART_REPO    := https://jaegertracing.github.io/helm-charts
+JAEGER_CHART_VERSION := 4.16.1
+
 # kubeconform only knows built-in Kubernetes types. Schemas for custom ones
 # (like ServiceMonitor) come from the CRDs catalog, pinned to one commit so a
 # change upstream can't break or loosen our checks.
@@ -25,7 +30,7 @@ CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdd
 PROTO_AGAINST ?= main
 
 .PHONY: help fmt fmt-check vet lint test test-integration test-scripts check load-journals hooks proto proto-check docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -148,6 +153,14 @@ cnpg: ## Install or upgrade the CloudNativePG operator in "cnpg-system" (needs m
 
 cnpg-down: ## Remove the CloudNativePG operator (its CRDs stay; delete databases first)
 	helm uninstall cnpg --kube-context $(KUBECTX) --namespace cnpg-system
+
+jaeger: ## Install or upgrade Jaeger (traces) in the "jaeger" namespace (make dev does this too)
+	helm upgrade --install jaeger jaeger --repo $(JAEGER_CHART_REPO) --version $(JAEGER_CHART_VERSION) \
+		--kube-context $(KUBECTX) --namespace jaeger --create-namespace \
+		-f deploy/jaeger/values.yaml --wait --timeout 5m
+
+jaeger-down: ## Remove Jaeger (its traces are in memory, so they go too)
+	helm uninstall jaeger --kube-context $(KUBECTX) --namespace jaeger
 
 dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
 	tilt up --context $(KUBECTX)

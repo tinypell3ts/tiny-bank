@@ -54,6 +54,8 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`, `build`, `perf`
 
 Describe tiny-bank as a core banking platform. In README, `AGENTS.md`, docs, ADRs and PR descriptions, don't present it as a copy or "<company>-style" version of another bank, or as a learning or demo project. Using other companies' open-source packages (Typhon, terrors), designs like theirs, and crediting them in code, `go.mod` and ADRs is fine. Explaining concepts in the phase pages is fine too.
 
+**No phase or PR numbers in code, comments or docs**, except ADRs and `docs/phases/`, which record when and why. Plans move and numbers go stale, so say what's true now instead: "services don't send traces yet", not "services send traces in Phase 8b"; "until there's sign-in", not "until Phase 12". Commit messages and PR descriptions may name them.
+
 ## Repo layout
 
 Current:
@@ -90,6 +92,7 @@ Current:
 │   ├── kind/            # local kind cluster config
 │   ├── charts/service/  # ONE generic Helm chart used by every service
 │   ├── cnpg/            # CloudNativePG operator values (Postgres for services)
+│   ├── jaeger/          # Jaeger values (traces, in memory) for the local cluster
 │   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
@@ -126,6 +129,8 @@ make monitoring               # install or upgrade Prometheus + Grafana in names
 make monitoring-down          # remove the monitoring stack
 make cnpg                     # install or upgrade the CloudNativePG operator in "cnpg-system" (make dev does this)
 make cnpg-down                # remove the operator (CRDs and databases stay)
+make jaeger                   # install or upgrade Jaeger (traces) in namespace "jaeger" (make dev does this)
+make jaeger-down              # remove Jaeger and the traces it holds
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
@@ -133,7 +138,7 @@ make load-journals RATE=5 DURATION=1m # with make dev running: post random journ
 make dev-down                 # remove what Tilt deployed, INCLUDING every service database and its data (cluster, monitoring, CloudNativePG stay)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 8082 (ledger), 8083 (transaction), 3000 (Grafana) and 9090 (Prometheus) are taken.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 8082 (ledger), 8083 (transaction), 3000 (Grafana), 9090 (Prometheus) and 16686 (Jaeger) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
