@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -65,13 +64,15 @@ func StartTracing(name string, getenv func(string) string, logger *slog.Logger) 
 	return provider.Shutdown, nil
 }
 
-// tracesURLFrom is the URL spans are sent to: endpoint's /v1/traces, as the
-// OTLP spec says for a base URL. endpoint must be an absolute http or https
-// URL, so a typo stops the service at startup instead of losing every trace.
+// tracesURLFrom is the URL spans are sent to: v1/traces added to endpoint's
+// path, as the OTLP spec says for a base URL, keeping any query string after
+// it (http://collector/otel?key=k becomes http://collector/otel/v1/traces?key=k).
+// endpoint must be an absolute http or https URL, so a typo stops the service
+// at startup instead of losing every trace.
 func tracesURLFrom(endpoint string) (string, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return "", fmt.Errorf("tracing: %s must be an http or https URL, like http://jaeger.jaeger:4318", TracingEndpoint)
 	}
-	return strings.TrimRight(endpoint, "/") + "/v1/traces", nil
+	return u.JoinPath("v1", "traces").String(), nil
 }

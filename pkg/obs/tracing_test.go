@@ -98,6 +98,21 @@ func TestTracingPassesTraceContextAsTraceparent(t *testing.T) {
 	}
 }
 
+func TestTracesURLAddsThePathBeforeAnyQuery(t *testing.T) {
+	tests := map[string]string{
+		"http://jaeger.jaeger:4318":        "http://jaeger.jaeger:4318/v1/traces",
+		"http://jaeger.jaeger:4318/":       "http://jaeger.jaeger:4318/v1/traces",
+		"https://collector/otel":           "https://collector/otel/v1/traces",
+		"https://collector/otel/?key=k":    "https://collector/otel/v1/traces?key=k",
+		"http://collector:4318?tenant=a&b": "http://collector:4318/v1/traces?tenant=a&b",
+	}
+	for endpoint, want := range tests {
+		if got, err := tracesURLFrom(endpoint); err != nil || got != want {
+			t.Errorf("tracesURLFrom(%q) = %q, %v; want %q", endpoint, got, err, want)
+		}
+	}
+}
+
 func TestTracingRefusesABadEndpoint(t *testing.T) {
 	// None of these appear in the error's own example URL, so the check that
 	// the value isn't repeated (it could hold credentials) means something.
