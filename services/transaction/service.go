@@ -3,6 +3,7 @@ package transaction
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -27,8 +28,14 @@ const (
 	finishTimeout = 5 * time.Second
 
 	// The finisher looks for due transfers every finisherInterval, claiming
-	// finisherBatch at a time, each for claimLease: longer than one attempt
-	// takes, so a claimed transfer is never tried twice at once.
+	// finisherBatch at a time. A claim (by a request or the finisher) holds a
+	// transfer for claimLease, until its first StartAttempt; a transfer still
+	// waiting in a batch when that runs out may be claimed by someone else,
+	// and the finisher then skips it (its lease no longer matches).
+	//
+	// After StartAttempt, nextAttemptAfter keeps others off it: at least
+	// 10s, more than a post to the ledger can take (kit.Post's 5s call
+	// timeout), so no two posts of one transfer ever overlap.
 	finisherInterval = time.Second
 	finisherBatch    = 20
 	claimLease       = 30 * time.Second
@@ -50,13 +57,21 @@ func NewService(store *Store, ledger Ledger, reg prometheus.Registerer) *Service
 }
 
 // Create saves req as a transfer (or finds the one already saved with its
-// key) and, if it's pending, posts it to the ledger, retrying what can be
-// retried within ctx's deadline and attemptsPerRequest. It returns the
-// transfer as it now stands: completed, failed, or still pending if the
-// ledger couldn't be reached or didn't answer in time.
+// key) and, if it's pending and due, claims it and posts it to the ledger,
+// retrying what can be retried within ctx's deadline and attemptsPerRequest.
+// It returns the transfer as it now stands: completed, failed, or still
+// pending if the ledger couldn't be reached or didn't answer in time, or if
+// another request or the finisher is already attempting it.
 func (s *Service) Create(ctx context.Context, req NewTransfer) (Transfer, bool, error) {
 	t, created, err := s.Store.Create(ctx, req)
 	if err != nil || t.State != StatePending {
+		return t, created, err
+	}
+	// One attempt at a time: two posts of one transfer racing could see one
+	// refused and the other post the money. If it's someone else's, or
+	// waiting for its next try, answer with it as it stands.
+	t, claimed, err := s.Claim(ctx, t.ID, claimLease)
+	if err != nil || !claimed {
 		return t, created, err
 	}
 	t, err = s.attempt(ctx, t, byRequest, attemptsPerRequest)
@@ -87,21 +102,35 @@ func (s *Service) RunFinisher(ctx context.Context, logger *slog.Logger) {
 // until none are due or ctx ends, and returns how many it tried. A transfer
 // the ledger still doesn't answer stays pending, due again later
 // (nextAttemptAfter). One transfer's error is logged and doesn't stop the
-// others. It starts by updating the pending metrics.
+// others.
+//
+// It updates the pending metrics before each transfer, at most once every
+// finisherInterval, so during an outage, when working through a backlog
+// takes minutes, the dashboard still shows the count and age growing.
 func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, error) {
-	count, oldest, err := s.Pending(ctx)
-	if err != nil {
-		return 0, err
+	var refreshed time.Time
+	refresh := func() {
+		if time.Since(refreshed) < finisherInterval {
+			return
+		}
+		count, oldest, err := s.Pending(ctx)
+		if err != nil {
+			logger.Error("count pending transfers", "error", err)
+			return
+		}
+		s.metrics.setPending(count, oldest)
+		refreshed = time.Now()
 	}
-	s.metrics.setPending(count, oldest)
 
 	tried := 0
 	for ctx.Err() == nil {
+		refresh()
 		due, err := s.ClaimDue(ctx, finisherBatch, claimLease)
 		if err != nil {
 			return tried, err
 		}
 		for _, t := range due {
+			refresh()
 			if _, err := s.attempt(ctx, t, byFinisher, 1); err != nil {
 				logger.Error("finish transfer", "transfer_id", t.ID, "error", err)
 			}
@@ -114,17 +143,21 @@ func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, erro
 	return tried, nil
 }
 
-// attempt posts pending transfer t to the ledger, up to tries times, and
-// records the outcome, counting each post as made by by. Before each try it records the attempt and
-// when to try again (nextAttemptAfter), so if this service dies mid-call the
-// transfer is still found and finished later. Every try uses the transfer's
-// own ID as the ledger's idempotency key, so the money moves at most once.
+// attempt posts pending transfer t, claimed under t.Lease, to the ledger, up
+// to tries times, and records the outcome, counting each post as made by by.
+// Before each try it records the attempt and when to try again
+// (nextAttemptAfter), so if this service dies mid-call the transfer is still
+// found and finished later. Every try uses the transfer's own ID as the
+// ledger's idempotency key, so the money moves at most once. If the
+// transfer moved on without it (finished, or claimed by another attempt), it
+// stops and returns the transfer as it now stands.
 func (s *Service) attempt(ctx context.Context, t Transfer, by string, tries int) (Transfer, error) {
 	for try := range tries {
-		var err error
-		if t, err = s.StartAttempt(ctx, t.ID, nextAttemptAfter(t.Attempts+1)); err != nil {
-			return t, fmt.Errorf("start attempt: %w", err)
+		started, err := s.StartAttempt(ctx, t.ID, t.Lease, nextAttemptAfter(t.Attempts+1))
+		if err != nil {
+			return settled(started, fmt.Errorf("start attempt: %w", err))
 		}
+		t = started
 		journalID, postErr := s.ledger.Post(ctx, t)
 		result, reason := outcomeOf(postErr)
 		s.metrics.posted(by, result, reason)
@@ -132,7 +165,7 @@ func (s *Service) attempt(ctx context.Context, t Transfer, by string, tries int)
 		case posted:
 			return s.record(ctx, func(ctx context.Context) (Transfer, error) { return s.Complete(ctx, t.ID, journalID) })
 		case refusedForGood:
-			return s.record(ctx, func(ctx context.Context) (Transfer, error) { return s.Fail(ctx, t.ID, reason) })
+			return settled(s.record(ctx, func(ctx context.Context) (Transfer, error) { return s.Fail(ctx, t.ID, t.Lease, reason) }))
 		case keyReused:
 			// Our own internal error, with the ledger's kept as its cause for
 			// the logs: wrapping the ledger's 412 would tell our caller their
@@ -149,6 +182,21 @@ func (s *Service) attempt(ctx context.Context, t Transfer, by string, tries int)
 		}
 	}
 	return t, nil
+}
+
+// settled turns the store refusing an attempt's change, because the
+// transfer moved on without it, into the transfer as it now stands: finished
+// by someone else (*finishedError), or claimed by another attempt
+// (errLeaseLost). That's not an error for our caller. Any other error is.
+func settled(t Transfer, err error) (Transfer, error) {
+	var finished *finishedError
+	switch {
+	case errors.As(err, &finished):
+		return finished.t, nil
+	case errors.Is(err, errLeaseLost):
+		return t, nil
+	}
+	return t, err
 }
 
 // record saves the ledger's answer with save, even if our caller has hung up

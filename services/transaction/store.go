@@ -27,7 +27,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 // columns is selected by every query, in the order scanTransfer reads them.
 const columns = `id, idempotency_key, kind, from_account, to_account, currency, amount, state,
-	journal_id, failure_reason, attempts, next_attempt_at, created_at, updated_at`
+	journal_id, failure_reason, attempts, next_attempt_at, created_at, updated_at, lease`
 
 // Create saves req as a new pending transfer. created is false when a
 // transfer with req's idempotency key already exists and asks for the same
@@ -81,15 +81,38 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (Transfer, error) {
 	return t, nil
 }
 
+// Claim makes the caller the only one attempting pending transfer id, if
+// it's due: it gives the transfer a new random Lease and pushes its
+// next_attempt_at forward by lease, so nobody else can claim it meanwhile.
+// ok is false when it isn't due (someone else is attempting it, or it's
+// waiting to be retried) or is already finished: the transfer is then
+// returned as it stands.
+func (s *Store) Claim(ctx context.Context, id uuid.UUID, lease time.Duration) (Transfer, bool, error) {
+	t, err := scanTransfer(s.pool.QueryRow(ctx,
+		`UPDATE transfers SET lease = gen_random_uuid(), next_attempt_at = now() + $2::interval, updated_at = now()
+		 WHERE id = $1 AND state = 'pending' AND next_attempt_at <= now() RETURNING `+columns,
+		id, lease))
+	if errors.Is(err, pgx.ErrNoRows) {
+		t, err = s.Get(ctx, id)
+		return t, false, err
+	}
+	if err != nil {
+		return Transfer{}, false, fmt.Errorf("claim transfer %s: %w", id, err)
+	}
+	return t, true, nil
+}
+
 // StartAttempt records that pending transfer id is about to be sent to the
-// ledger: it counts the attempt, and sets when it's next due if this one
-// doesn't finish it (after retryAfter). Recording it first means that if the
-// service dies mid-attempt, the transfer is still picked up and tried again.
-func (s *Store) StartAttempt(ctx context.Context, id uuid.UUID, retryAfter time.Duration) (Transfer, error) {
+// ledger by the holder of lease: it counts the attempt, and sets when it's
+// next due if this one doesn't finish it (after retryAfter). Recording it
+// first means that if the service dies mid-attempt, the transfer is still
+// picked up and tried again. If someone else holds the lease now, it's an
+// errLeaseLost, and the caller must not post.
+func (s *Store) StartAttempt(ctx context.Context, id, lease uuid.UUID, retryAfter time.Duration) (Transfer, error) {
 	return s.change(ctx, id, "start attempt on",
 		`UPDATE transfers SET attempts = attempts + 1, next_attempt_at = now() + $2::interval, updated_at = now()
-		 WHERE id = $1 AND state = 'pending' RETURNING `+columns,
-		id, retryAfter)
+		 WHERE id = $1 AND state = 'pending' AND lease = $3 RETURNING `+columns,
+		id, retryAfter, lease)
 }
 
 // ClaimDue claims up to limit pending transfers that are due to be tried
@@ -101,7 +124,7 @@ func (s *Store) StartAttempt(ctx context.Context, id uuid.UUID, retryAfter time.
 // due again once the lease runs out.
 func (s *Store) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]Transfer, error) {
 	rows, err := s.pool.Query(ctx,
-		`UPDATE transfers SET next_attempt_at = now() + $2::interval, updated_at = now()
+		`UPDATE transfers SET lease = gen_random_uuid(), next_attempt_at = now() + $2::interval, updated_at = now()
 		 WHERE id IN (SELECT id FROM transfers WHERE state = 'pending' AND next_attempt_at <= now()
 		              ORDER BY next_attempt_at LIMIT $1 FOR UPDATE SKIP LOCKED)
 		 RETURNING `+columns,
@@ -145,14 +168,19 @@ func (s *Store) Complete(ctx context.Context, id, journalID uuid.UUID) (Transfer
 }
 
 // Fail marks pending transfer id failed, refused by the ledger for reason
-// (its terror code). Failing it again for the same reason is fine; anything
-// else on a finished transfer is an error.
-func (s *Store) Fail(ctx context.Context, id uuid.UUID, reason string) (Transfer, error) {
+// (its terror code), if the caller still holds lease. A refusal only counts
+// from the lease holder: an attempt that lost its lease may have been
+// overtaken by one that moved the money, so its refusal is an errLeaseLost,
+// and the transfer stays as it is. (Complete needs no lease: once the ledger
+// has posted the journal, completed is the truth whoever reports it.)
+// Failing it again for the same reason is fine; anything else on a finished
+// transfer is an error.
+func (s *Store) Fail(ctx context.Context, id, lease uuid.UUID, reason string) (Transfer, error) {
 	return s.finish(ctx, id, "fail",
 		`UPDATE transfers SET state = 'failed', failure_reason = $2, updated_at = now()
-		 WHERE id = $1 AND state = 'pending' RETURNING `+columns,
+		 WHERE id = $1 AND state = 'pending' AND lease = $3 RETURNING `+columns,
 		func(t Transfer) bool { return t.State == StateFailed && t.FailureReason == reason },
-		id, reason)
+		id, reason, lease)
 }
 
 // finish moves a pending transfer to a final state with sql. If it's already
@@ -178,8 +206,14 @@ func (e *finishedError) Error() string {
 	return fmt.Sprintf("transfer %s is already %s, and a finished transfer never changes", e.t.ID, e.t.State)
 }
 
-// change runs an UPDATE that only matches a pending transfer. If it matches
-// nothing, the transfer is missing (not_found) or finished (*finishedError).
+// errLeaseLost is a change asked by an attempt whose lease someone else now
+// holds. The transfer is someone else's to finish.
+var errLeaseLost = errors.New("someone else is attempting this transfer now")
+
+// change runs an UPDATE that only matches a pending transfer (and, for some,
+// its lease). If it matches nothing, the transfer is missing (not_found),
+// finished (*finishedError), or pending under another lease (errLeaseLost,
+// with the transfer as it now stands).
 func (s *Store) change(ctx context.Context, id uuid.UUID, what, sql string, args ...any) (Transfer, error) {
 	t, err := scanTransfer(s.pool.QueryRow(ctx, sql, args...))
 	if err == nil {
@@ -191,6 +225,9 @@ func (s *Store) change(ctx context.Context, id uuid.UUID, what, sql string, args
 	current, err := s.Get(ctx, id)
 	if err != nil {
 		return Transfer{}, err
+	}
+	if current.State == StatePending {
+		return current, fmt.Errorf("%s transfer %s: %w", what, id, errLeaseLost)
 	}
 	return Transfer{}, fmt.Errorf("%s: %w", what, &finishedError{current})
 }
@@ -205,9 +242,10 @@ func scanTransfer(row pgx.Row) (Transfer, error) {
 		state     string
 		journalID *uuid.UUID
 		reason    *string
+		lease     *uuid.UUID
 	)
 	if err := row.Scan(&t.ID, &t.IdempotencyKey, &kind, &from, &t.To, &currency, &amount, &state,
-		&journalID, &reason, &t.Attempts, &t.NextAttemptAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&journalID, &reason, &t.Attempts, &t.NextAttemptAt, &t.CreatedAt, &t.UpdatedAt, &lease); err != nil {
 		return Transfer{}, err
 	}
 	c, err := money.ParseCurrency(currency)
@@ -223,6 +261,9 @@ func scanTransfer(row pgx.Row) (Transfer, error) {
 	}
 	if reason != nil {
 		t.FailureReason = *reason
+	}
+	if lease != nil {
+		t.Lease = *lease
 	}
 	return t, nil
 }

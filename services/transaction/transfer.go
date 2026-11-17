@@ -62,8 +62,11 @@ type Transfer struct {
 	FailureReason  string    // set once failed: the ledger's terror code, like precondition_failed.insufficient_funds
 	Attempts       int       // how many times it's been sent to the ledger
 	NextAttemptAt  time.Time // when a pending transfer is next due to be tried
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// Lease is who is attempting it now (Store.Claim). Only the holder may
+	// post it to the ledger. Internal: never in the API.
+	Lease     uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // NewTransfer is a request to move money.

@@ -35,6 +35,17 @@ func mustCreate(t *testing.T, s *Store, req NewTransfer) Transfer {
 	return tr
 }
 
+// mustClaim claims transfer id, which must be due, and returns it with its
+// lease.
+func mustClaim(t *testing.T, s *Store, id uuid.UUID) Transfer {
+	t.Helper()
+	tr, ok, err := s.Claim(t.Context(), id, time.Minute)
+	if err != nil || !ok || tr.Lease == uuid.Nil() {
+		t.Fatalf("Claim = %+v, %v, %v; want it claimed with a lease", tr, ok, err)
+	}
+	return tr
+}
+
 func TestCreateSavesAPendingTransfer(t *testing.T) {
 	s := newTestStore(t)
 	before := time.Now().Add(-time.Minute)
@@ -104,22 +115,22 @@ func TestConcurrentCreatesWithOneKeySaveOne(t *testing.T) {
 
 func TestStartAttemptCountsAndSchedulesTheNextOne(t *testing.T) {
 	s := newTestStore(t)
-	tr := mustCreate(t, s, transferReq("t1", alice, bob, 300))
-	got, err := s.StartAttempt(t.Context(), tr.ID, time.Minute)
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	got, err := s.StartAttempt(t.Context(), tr.ID, tr.Lease, time.Minute)
 	if err != nil || got.Attempts != 1 {
 		t.Fatalf("StartAttempt = %+v, %v; want 1 attempt", got, err)
 	}
 	if wait := got.NextAttemptAt.Sub(got.UpdatedAt); wait < 59*time.Second || wait > 61*time.Second {
 		t.Errorf("next attempt in %v, want about a minute", wait)
 	}
-	if got, _ := s.StartAttempt(t.Context(), tr.ID, time.Minute); got.Attempts != 2 {
+	if got, _ := s.StartAttempt(t.Context(), tr.ID, tr.Lease, time.Minute); got.Attempts != 2 {
 		t.Errorf("attempts = %d, want 2", got.Attempts)
 	}
 }
 
 func TestCompleteIsFinal(t *testing.T) {
 	s := newTestStore(t)
-	tr := mustCreate(t, s, transferReq("t1", alice, bob, 300))
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
 	journal := uuid.New()
 
 	done, err := s.Complete(t.Context(), tr.ID, journal)
@@ -132,8 +143,8 @@ func TestCompleteIsFinal(t *testing.T) {
 	}
 	// Anything else is a bug, and must not change the transfer.
 	_, errOther := s.Complete(t.Context(), tr.ID, uuid.New())
-	_, errFail := s.Fail(t.Context(), tr.ID, "precondition_failed.insufficient_funds")
-	_, errRetry := s.StartAttempt(t.Context(), tr.ID, time.Minute)
+	_, errFail := s.Fail(t.Context(), tr.ID, tr.Lease, "precondition_failed.insufficient_funds")
+	_, errRetry := s.StartAttempt(t.Context(), tr.ID, tr.Lease, time.Minute)
 	for name, err := range map[string]error{"another journal": errOther, "failing it": errFail, "another attempt": errRetry} {
 		var finished *finishedError
 		if !errors.As(err, &finished) {
@@ -147,11 +158,11 @@ func TestCompleteIsFinal(t *testing.T) {
 
 func TestFailIsFinal(t *testing.T) {
 	s := newTestStore(t)
-	tr := mustCreate(t, s, transferReq("t1", alice, bob, 300))
-	if got, err := s.Fail(t.Context(), tr.ID, "precondition_failed.insufficient_funds"); err != nil || got.State != StateFailed {
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	if got, err := s.Fail(t.Context(), tr.ID, tr.Lease, "precondition_failed.insufficient_funds"); err != nil || got.State != StateFailed {
 		t.Fatalf("Fail = %+v, %v", got, err)
 	}
-	if _, err := s.Fail(t.Context(), tr.ID, "precondition_failed.insufficient_funds"); err != nil {
+	if _, err := s.Fail(t.Context(), tr.ID, tr.Lease, "precondition_failed.insufficient_funds"); err != nil {
 		t.Errorf("failing again for the same reason = %v, want it accepted", err)
 	}
 	var finished *finishedError
@@ -204,8 +215,8 @@ func makeDue(t *testing.T, s *Store, id uuid.UUID) {
 func TestClaimDueClaimsOnlyDuePendingTransfers(t *testing.T) {
 	s := newTestStore(t)
 	due := mustCreate(t, s, transferReq("due", alice, bob, 1))
-	notYet := mustCreate(t, s, transferReq("not-yet", alice, bob, 2))
-	if _, err := s.StartAttempt(t.Context(), notYet.ID, time.Hour); err != nil {
+	notYet := mustClaim(t, s, mustCreate(t, s, transferReq("not-yet", alice, bob, 2)).ID)
+	if _, err := s.StartAttempt(t.Context(), notYet.ID, notYet.Lease, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	done := mustCreate(t, s, transferReq("done", alice, bob, 3))
@@ -216,8 +227,8 @@ func TestClaimDueClaimsOnlyDuePendingTransfers(t *testing.T) {
 
 	before := time.Now()
 	claimed, err := s.ClaimDue(t.Context(), 10, time.Minute)
-	if err != nil || len(claimed) != 1 || claimed[0].ID != due.ID {
-		t.Fatalf("ClaimDue = %v, %v; want only the due pending transfer", claimed, err)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != due.ID || claimed[0].Lease == uuid.Nil() {
+		t.Fatalf("ClaimDue = %v, %v; want only the due pending transfer, with a lease", claimed, err)
 	}
 	if !claimed[0].NextAttemptAt.After(before.Add(50 * time.Second)) {
 		t.Errorf("next attempt %v, want it pushed a lease ahead", claimed[0].NextAttemptAt)
@@ -281,5 +292,55 @@ func TestFinishersNeverClaimTheSameTransfer(t *testing.T) {
 		if times != 1 {
 			t.Errorf("transfer %s claimed %d times, want once", id, times)
 		}
+	}
+}
+
+func TestClaimTakesATransferOnlyWhenItsDue(t *testing.T) {
+	s := newTestStore(t)
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	// Claimed: not due again until the claim runs out, so nobody else gets it.
+	again, ok, err := s.Claim(t.Context(), tr.ID, time.Minute)
+	if err != nil || ok || again.ID != tr.ID || again.Lease != tr.Lease {
+		t.Fatalf("second Claim = %+v, %v, %v; want it refused, with the transfer as it stands", again, ok, err)
+	}
+	// Once due again, it's claimed under a new lease.
+	makeDue(t, s, tr.ID)
+	if next := mustClaim(t, s, tr.ID); next.Lease == tr.Lease {
+		t.Error("a new claim kept the old lease")
+	}
+}
+
+func TestAFinishedTransferCantBeClaimed(t *testing.T) {
+	s := newTestStore(t)
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	makeDue(t, s, tr.ID) // due, so only its being finished stops the claim
+	if _, err := s.Complete(t.Context(), tr.ID, uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Claim(t.Context(), tr.ID, time.Minute); err != nil || ok || got.State != StateCompleted {
+		t.Errorf("Claim = %+v, %v, %v; want it refused, with the completed transfer", got, ok, err)
+	}
+}
+
+// TestOnlyTheLeaseHolderCanAttemptOrRefuse: an attempt whose claim ran out,
+// and was taken by another, may neither post again nor record a refusal: the
+// other attempt may have moved the money.
+func TestOnlyTheLeaseHolderCanAttemptOrRefuse(t *testing.T) {
+	s := newTestStore(t)
+	first := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	makeDue(t, s, first.ID) // first's claim ran out
+	second := mustClaim(t, s, first.ID)
+
+	if got, err := s.StartAttempt(t.Context(), first.ID, first.Lease, time.Minute); !errors.Is(err, errLeaseLost) || got.Lease != second.Lease {
+		t.Errorf("StartAttempt with the old lease = %+v, %v; want errLeaseLost with the transfer as it stands", got, err)
+	}
+	if _, err := s.Fail(t.Context(), first.ID, first.Lease, "precondition_failed.insufficient_funds"); !errors.Is(err, errLeaseLost) {
+		t.Errorf("Fail with the old lease = %v, want errLeaseLost", err)
+	}
+	if got, _ := s.Get(t.Context(), first.ID); got.State != StatePending || got.Attempts != 0 {
+		t.Errorf("transfer = %s after %d attempts; want it untouched by the old lease", got.State, got.Attempts)
+	}
+	if got, err := s.Fail(t.Context(), second.ID, second.Lease, "precondition_failed.insufficient_funds"); err != nil || got.State != StateFailed {
+		t.Errorf("Fail with the current lease = %+v, %v; want it failed", got, err)
 	}
 }

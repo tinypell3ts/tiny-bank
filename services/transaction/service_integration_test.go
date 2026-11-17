@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
@@ -140,12 +141,25 @@ func TestARetryOfAFinishedTransferDoesntCallTheLedger(t *testing.T) {
 	}
 }
 
-func TestARetryOfAPendingTransferTriesAgain(t *testing.T) {
+// TestARetryOfAPendingTransferWaitsUntilItsDue: until its next attempt is
+// due, a pending transfer may still be in someone's hands, so a retry
+// answers with it as it stands and doesn't post.
+func TestARetryOfAPendingTransferWaitsUntilItsDue(t *testing.T) {
+	s, ledger := newTestService(t, errUnreachable)
+	first, _, _ := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
+	again, created, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
+	if err != nil || created || again.ID != first.ID || again.State != StatePending || ledger.calls() != attemptsPerRequest {
+		t.Fatalf("retry = %+v, %v, %d calls; want the same pending transfer, no new post", again, err, ledger.calls())
+	}
+}
+
+func TestARetryOfAPendingTransferTriesAgainOnceItsDue(t *testing.T) {
 	s, _ := newTestService(t, errUnreachable, errUnreachable, errUnreachable, nil)
 	first, _, _ := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
 	if first.State != StatePending {
 		t.Fatalf("first = %s, want pending", first.State)
 	}
+	makeDue(t, s.Store, first.ID)
 	again, _, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
 	if err != nil || again.ID != first.ID || again.State != StateCompleted || again.Attempts != 4 {
 		t.Fatalf("retry = %+v, %v; want the same transfer completed on attempt 4", again, err)
@@ -330,5 +344,124 @@ func TestTheMetricsSayWhoTriedAndWhatsStuck(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(s.metrics.oldestPending); got <= 0 {
 		t.Errorf("oldest pending = %vs, want its age", got)
+	}
+}
+
+// blockingLedger holds its first post until release is closed, signalling
+// posting once it's started, and answers every post like its fakeLedger.
+// Later posts aren't held, so a test of "no second post" fails rather than
+// hangs.
+type blockingLedger struct {
+	*fakeLedger
+	started          atomic.Int32
+	posting, release chan struct{}
+}
+
+func (l *blockingLedger) Post(ctx context.Context, t Transfer) (uuid.UUID, error) {
+	if l.started.Add(1) == 1 {
+		close(l.posting)
+		<-l.release
+	}
+	return l.fakeLedger.Post(ctx, t)
+}
+
+// TestTwoAttemptsNeverPostAtOnce is the race the lease stops: request A's
+// post is refused (the ledger keeps no key for a refusal), a deposit lands,
+// and a retry B posts the money. If both posted, A could save "failed" for a
+// transfer whose money moved. With one attempt at a time, B doesn't post
+// while A holds the transfer.
+func TestTwoAttemptsNeverPostAtOnce(t *testing.T) {
+	ledger := &blockingLedger{
+		fakeLedger: &fakeLedger{answers: []error{errNoFunds, nil}, journal: uuid.New()},
+		posting:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	s := NewService(newTestStore(t), ledger, prometheus.NewRegistry())
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(ledger.release) }) }
+	t.Cleanup(release) // so A never hangs if the test stops early
+
+	type result struct {
+		tr  Transfer
+		err error
+	}
+	a := make(chan result, 1)
+	go func() {
+		tr, _, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
+		a <- result{tr, err}
+	}()
+	<-ledger.posting
+
+	b, _, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
+	if err != nil || b.State != StatePending {
+		t.Fatalf("retry B = %+v, %v; want it answered pending while A holds the transfer", b, err)
+	}
+	release()
+	first := <-a
+	if first.err != nil || first.tr.State != StateFailed || ledger.calls() != 1 {
+		t.Fatalf("A = %+v, %v after %d posts; want failed, and B never posted", first.tr, first.err, ledger.calls())
+	}
+}
+
+// TestAnAttemptThatLostItsClaimDoesntPost: the finisher claimed a batch, but
+// one transfer's claim ran out before it got to it, and a retry took it
+// over. The finisher's attempt must not post: it answers with the transfer
+// as it stands, finished or still in the other attempt's hands.
+func TestAnAttemptThatLostItsClaimDoesntPost(t *testing.T) {
+	for name, retryGets := range map[string]error{"the retry completes it": nil, "the retry leaves it pending": errUnreachable} {
+		t.Run(name, func(t *testing.T) {
+			s, ledger := newTestService(t, retryGets)
+			tr, _, err := s.Store.Create(t.Context(), transferReq("t1", alice, bob, 300))
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := s.ClaimDue(t.Context(), finisherBatch, claimLease)
+			if err != nil || len(claimed) != 1 {
+				t.Fatalf("ClaimDue = %v, %v", claimed, err)
+			}
+			makeDue(t, s.Store, tr.ID) // the finisher's claim ran out
+			retry, _, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300))
+			if err != nil {
+				t.Fatal(err)
+			}
+			posts := ledger.calls()
+
+			got, err := s.attempt(t.Context(), claimed[0], byFinisher, 1)
+			if err != nil || got.State != retry.State || ledger.calls() != posts {
+				t.Errorf("finisher = %s, %v after %d more posts; want %s as the retry left it, and no post", got.State, err, ledger.calls()-posts, retry.State)
+			}
+		})
+	}
+}
+
+// ledgerFunc is a Ledger made from a function.
+type ledgerFunc func(context.Context, Transfer) (uuid.UUID, error)
+
+func (f ledgerFunc) Post(ctx context.Context, t Transfer) (uuid.UUID, error) { return f(ctx, t) }
+
+// TestThePendingGaugesKeepUpDuringASlowDrain: with a slow ledger, working
+// through what's due takes a while, and the dashboard must keep showing the
+// oldest transfer getting older meanwhile, not a number from the start.
+func TestThePendingGaugesKeepUpDuringASlowDrain(t *testing.T) {
+	var s *Service
+	var seen []float64
+	slow := ledgerFunc(func(context.Context, Transfer) (uuid.UUID, error) {
+		seen = append(seen, testutil.ToFloat64(s.metrics.oldestPending))
+		time.Sleep(finisherInterval + 100*time.Millisecond)
+		return uuid.Nil(), errLedgerDown
+	})
+	s = NewService(newTestStore(t), slow, prometheus.NewRegistry())
+	for _, key := range []string{"t1", "t2"} {
+		tr, _, err := s.Store.Create(t.Context(), transferReq(key, alice, bob, 300))
+		if err != nil {
+			t.Fatal(err)
+		}
+		makeDue(t, s.Store, tr.ID)
+	}
+	if _, err := s.FinishDue(t.Context(), discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[1] < seen[0]+1 {
+		t.Errorf("oldest pending seen at each post = %v; want it refreshed between them, about a second older", seen)
 	}
 }
