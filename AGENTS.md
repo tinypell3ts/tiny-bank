@@ -50,6 +50,7 @@ Current:
 ├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: config, startup (connect, migrate), HTTP server, probes
 ├── services/account/    # account service code: domain, Postgres store, HTTP API, migrations/*.sql
+├── services/ledger/     # ledger service code: double-entry journals, balances under row locks, idempotency keys, migrations/*.sql
 ├── pkg/kit/             # every service's foundation: Main, config, JSON logger, Serve (graceful shutdown), Handler (Typhon router + shared filters), Decode/Respond (protobuf as JSON), Health, Secret
 │   └── kittest/         # Conformance: the checks every service's handler must pass (health, request IDs, errors, metrics)
 ├── pkg/obs/             # shared observability: Prometheus registry, /metrics handler, HTTP RED metrics (Track)
