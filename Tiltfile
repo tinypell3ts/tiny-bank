@@ -94,15 +94,26 @@ local_resource(
     labels=['postgres'],
 )
 
-def forward(name, service, port, target):
-    """Forward localhost:<port> to a service in the monitoring namespace."""
+# --- Traces: Jaeger ---
+# Same pattern again: plain Helm through `make jaeger`, rerun only when its
+# values change, left running by `tilt down`. Its traces are kept in memory.
+local_resource(
+    'jaeger',
+    cmd='make jaeger',
+    deps=['deploy/jaeger/values.yaml'],
+    labels=['tracing'],
+)
+
+def forward(name, service, port, target, namespace='monitoring', dep='monitoring', label='monitoring'):
+    """Forward localhost:<port> (localhost only) to a service in namespace, once dep is up."""
     local_resource(
         name,
-        serve_cmd='kubectl --context %s -n monitoring port-forward svc/%s %d:%d' % (CONTEXT, service, port, target),
-        resource_deps=['monitoring'],
+        serve_cmd='kubectl --context %s -n %s port-forward svc/%s %d:%d' % (CONTEXT, namespace, service, port, target),
+        resource_deps=[dep],
         links=[link('http://localhost:%d' % port, name)],
-        labels=['monitoring'],
+        labels=[label],
     )
 
 forward('grafana', 'monitoring-grafana', 3000, 80)
 forward('prometheus', 'monitoring-prometheus', 9090, 9090)
+forward('jaeger-ui', 'jaeger', 16686, 16686, namespace='jaeger', dep='jaeger', label='tracing')

@@ -1,0 +1,48 @@
+# Jaeger settings for the LOCAL kind cluster.
+# Installed by `make jaeger` (and by `make dev` through the Tiltfile).
+# The chart version is pinned in the Makefile (JAEGER_CHART_VERSION).
+#
+# Jaeger v2 is built on the OpenTelemetry Collector. With no `userconfig`, the
+# chart runs the image's built-in all-in-one config: it receives traces over
+# OTLP (gRPC on 4317, HTTP on 4318), keeps them in memory, and serves the UI
+# on 16686. Memory storage is lost when the pod restarts, which is fine for a
+# laptop: traces are for looking at what just happened, not for keeping.
+#
+# Inside the cluster, OTLP over HTTP is at http://jaeger.jaeger:4318.
+# The `jaeger` Service is ClusterIP, so nothing outside the cluster can reach
+# it; the UI is only port-forwarded to localhost.
+
+jaeger:
+  # Memory storage grows with traces until it reaches its cap (100,000 traces
+  # by default), so give it a limit the kind node can afford.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  # Go sees the container limit, and collects garbage before it's reached
+  # instead of being OOMKilled (the same reason kit.Main sets it for our
+  # services).
+  extraEnv:
+    - name: GOMEMLIMIT
+      value: "450MiB"
+  # Jaeger never talks to the Kubernetes API, so it gets no token, like our
+  # own pods (deploy/charts/service/templates/deployment.yaml).
+  serviceAccount:
+    automountServiceAccountToken: false
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+  # Our Prometheus finds targets through ServiceMonitors, not annotations, so
+  # these would do nothing. Scraping Jaeger itself can wait until it's needed.
+  podAnnotations: {}
