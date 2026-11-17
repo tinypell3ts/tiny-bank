@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strconv"
 
 	"github.com/monzo/terrors"
 	"github.com/monzo/typhon"
@@ -103,26 +104,34 @@ func forwardTrace(req typhon.Request, next typhon.Service) typhon.Response {
 
 // startCallSpan starts a client span for a call to target, under the span in
 // ctx (the request being handled), so the trace shows where time went. It's
-// named by method and the other service, from target's host ("POST ledger"),
-// never its path, which may hold IDs: the same rule as server spans.
+// named by method and the other service, from target's host name ("POST
+// ledger"), never its path, which may hold IDs (the same rule as server
+// spans), nor its port, so one service is one name. The port, if the URL has
+// one, is recorded as server.port.
 func startCallSpan(ctx context.Context, method, target string) (context.Context, trace.Span) {
 	host := "unknown"
-	if u, err := url.Parse(target); err == nil && u.Host != "" {
-		host = u.Host
+	attrs := []attribute.KeyValue{}
+	if u, err := url.Parse(target); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+		if port, err := strconv.Atoi(u.Port()); err == nil {
+			attrs = append(attrs, attribute.Int("server.port", port))
+		}
 	}
 	method = obs.MethodLabel(method)
-	return otel.Tracer(tracerName).Start(ctx, method+" "+host,
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("http.request.method", method),
-			attribute.String("server.address", host),
-		))
+	attrs = append(attrs, attribute.String("http.request.method", method), attribute.String("server.address", host))
+	return otel.Tracer(tracerName).Start(ctx, method+" "+host, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 }
 
-// endCallSpan ends a client span with the call's status (0 if no response
-// came back) and its error. Any failed call marks the span failed: from the
-// caller's side a refusal is a failure too. A terror's code is recorded as
-// error.type; any other error (a timeout, no connection) as "_OTHER".
+// endCallSpan ends a client span with the call's status, 0 if no response
+// came back (wireStatus sets it only for a real one), and its error. Any
+// failed call marks the span failed: from the caller's side a refusal is a
+// failure too.
+//
+// error.type is the other service's terror code when it answered. When
+// nothing came back (no connection, a timeout, no time left to try), it's
+// "_OTHER", even though Typhon's ErrorFilter has by then turned the failure
+// into an internal_service terror: recording that would make an unreachable
+// service look like one that answered 500.
 func endCallSpan(span trace.Span, status int, err error) {
 	if status != 0 {
 		span.SetAttributes(attribute.Int("http.response.status_code", status))
@@ -130,7 +139,7 @@ func endCallSpan(span trace.Span, status int, err error) {
 	if err != nil {
 		errorType := "_OTHER"
 		var terr *terrors.Error
-		if errors.As(err, &terr) {
+		if status != 0 && errors.As(err, &terr) {
 			errorType = terr.Code
 		}
 		span.SetAttributes(attribute.String("error.type", errorType))

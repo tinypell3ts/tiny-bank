@@ -77,7 +77,10 @@ var client = typhon.HttpService(transport).
 	Filter(forwardTrace)
 
 // wireStatusKey holds, in a call's context, where wireStatus writes the
-// status of the response that came back.
+// status of the response that came back. It's a pointer back to call, not an
+// attribute set on the span, because endCallSpan needs to know whether any
+// response came back at all to label the error (a span's attributes can't be
+// read back).
 type wireStatusKey struct{}
 
 // wireStatus records the status of a response that came back over the
