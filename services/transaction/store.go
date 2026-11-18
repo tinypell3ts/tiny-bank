@@ -25,7 +25,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// columns is selected by every query, in the order scanTransfer reads them.
+// columns is selected by every query. scanTransfer reads them by name, so
+// their order doesn't matter, but each must be a field of transferRow.
 const columns = `id, idempotency_key, kind, from_account, to_account, currency, amount, state,
 	journal_id, failure_reason, attempts, next_attempt_at, created_at, updated_at, lease, trace_id, request_id`
 
@@ -46,11 +47,11 @@ func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, er
 	if req.Kind == KindTransfer {
 		from = &req.From
 	}
-	t, err := scanTransfer(s.pool.QueryRow(ctx,
+	t, err := s.queryTransfer(ctx,
 		`INSERT INTO transfers (idempotency_key, kind, from_account, to_account, currency, amount, trace_id, request_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''))
 		 ON CONFLICT (idempotency_key) DO NOTHING RETURNING `+columns,
-		req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount(), req.TraceID, req.RequestID))
+		req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount(), req.TraceID, req.RequestID)
 	if err == nil {
 		return t, true, nil
 	}
@@ -59,7 +60,7 @@ func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, er
 	}
 
 	// The key is taken: a retry, or a key reused for something else.
-	existing, err := scanTransfer(s.pool.QueryRow(ctx, `SELECT `+columns+` FROM transfers WHERE idempotency_key = $1`, req.IdempotencyKey))
+	existing, err := s.queryTransfer(ctx, `SELECT `+columns+` FROM transfers WHERE idempotency_key = $1`, req.IdempotencyKey)
 	if err != nil {
 		return Transfer{}, false, fmt.Errorf("create transfer: read transfer for key: %w", err)
 	}
@@ -71,7 +72,7 @@ func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, er
 
 // Get returns the transfer with id, or a terrors not_found.transfer.
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Transfer, error) {
-	t, err := scanTransfer(s.pool.QueryRow(ctx, `SELECT `+columns+` FROM transfers WHERE id = $1`, id))
+	t, err := s.queryTransfer(ctx, `SELECT `+columns+` FROM transfers WHERE id = $1`, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Transfer{}, errNotFound()
 	}
@@ -88,10 +89,10 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (Transfer, error) {
 // waiting to be retried) or is already finished: the transfer is then
 // returned as it stands.
 func (s *Store) Claim(ctx context.Context, id uuid.UUID, lease time.Duration) (Transfer, bool, error) {
-	t, err := scanTransfer(s.pool.QueryRow(ctx,
+	t, err := s.queryTransfer(ctx,
 		`UPDATE transfers SET lease = gen_random_uuid(), next_attempt_at = now() + $2::interval, updated_at = now()
 		 WHERE id = $1 AND state = 'pending' AND next_attempt_at <= now() RETURNING `+columns,
-		id, lease))
+		id, lease)
 	if errors.Is(err, pgx.ErrNoRows) {
 		t, err = s.Get(ctx, id)
 		return t, false, err
@@ -132,7 +133,7 @@ func (s *Store) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([
 	if err != nil {
 		return nil, fmt.Errorf("claim due transfers: %w", err)
 	}
-	due, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Transfer, error) { return scanTransfer(row) })
+	due, err := pgx.CollectRows(rows, scanTransfer)
 	if err != nil {
 		return nil, fmt.Errorf("claim due transfers: %w", err)
 	}
@@ -215,7 +216,7 @@ var errLeaseLost = errors.New("someone else is attempting this transfer now")
 // finished (*finishedError), or pending under another lease (errLeaseLost,
 // with the transfer as it now stands).
 func (s *Store) change(ctx context.Context, id uuid.UUID, what, sql string, args ...any) (Transfer, error) {
-	t, err := scanTransfer(s.pool.QueryRow(ctx, sql, args...))
+	t, err := s.queryTransfer(ctx, sql, args...)
 	if err == nil {
 		return t, nil
 	}
@@ -232,46 +233,65 @@ func (s *Store) change(ctx context.Context, id uuid.UUID, what, sql string, args
 	return Transfer{}, fmt.Errorf("%s: %w", what, &finishedError{current})
 }
 
-func scanTransfer(row pgx.Row) (Transfer, error) {
-	var (
-		t         Transfer
-		kind      string
-		from      *uuid.UUID
-		currency  string
-		amount    int64
-		state     string
-		journalID *uuid.UUID
-		reason    *string
-		lease     *uuid.UUID
-		traceID   *string
-		requestID *string
-	)
-	if err := row.Scan(&t.ID, &t.IdempotencyKey, &kind, &from, &t.To, &currency, &amount, &state,
-		&journalID, &reason, &t.Attempts, &t.NextAttemptAt, &t.CreatedAt, &t.UpdatedAt, &lease, &traceID, &requestID); err != nil {
+// transferRow is a row of transfers, read by column name
+// (pgx.RowToStructByName): the order of the columns doesn't matter, and a
+// column with no field here, or a field with no column, is an error rather
+// than a value quietly landing in the wrong field, as it could when two
+// columns of the same type (created_at, updated_at) were read by position.
+type transferRow struct {
+	ID             uuid.UUID  `db:"id"`
+	IdempotencyKey string     `db:"idempotency_key"`
+	Kind           string     `db:"kind"`
+	FromAccount    *uuid.UUID `db:"from_account"` // NULL for a deposit
+	ToAccount      uuid.UUID  `db:"to_account"`
+	Currency       string     `db:"currency"`
+	Amount         int64      `db:"amount"`
+	State          string     `db:"state"`
+	JournalID      *uuid.UUID `db:"journal_id"`
+	FailureReason  *string    `db:"failure_reason"`
+	Attempts       int        `db:"attempts"`
+	NextAttemptAt  time.Time  `db:"next_attempt_at"`
+	CreatedAt      time.Time  `db:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"`
+	Lease          *uuid.UUID `db:"lease"`
+	TraceID        *string    `db:"trace_id"`
+	RequestID      *string    `db:"request_id"`
+}
+
+// queryTransfer runs sql, which must return exactly the columns, and reads
+// its one row into a Transfer. No row is pgx.ErrNoRows, as with QueryRow.
+func (s *Store) queryTransfer(ctx context.Context, sql string, args ...any) (Transfer, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
 		return Transfer{}, err
 	}
-	c, err := money.ParseCurrency(currency)
+	return pgx.CollectOneRow(rows, scanTransfer)
+}
+
+// scanTransfer reads one row by column name (transferRow) into a Transfer.
+func scanTransfer(row pgx.CollectableRow) (Transfer, error) {
+	r, err := pgx.RowToStructByName[transferRow](row)
+	if err != nil {
+		return Transfer{}, err
+	}
+	c, err := money.ParseCurrency(r.Currency)
 	if err != nil { // the table and pkg/money have drifted apart: fail loudly rather than guess
-		return Transfer{}, fmt.Errorf("stored transfer %s: %w", t.ID, err)
+		return Transfer{}, fmt.Errorf("stored transfer %s: %w", r.ID, err)
 	}
-	t.Kind, t.State, t.Amount = Kind(kind), State(state), money.New(amount, c)
-	if from != nil {
-		t.From = *from
+	return Transfer{
+		ID: r.ID, IdempotencyKey: r.IdempotencyKey, Kind: Kind(r.Kind),
+		From: deref(r.FromAccount), To: r.ToAccount, Amount: money.New(r.Amount, c),
+		State: State(r.State), JournalID: deref(r.JournalID), FailureReason: deref(r.FailureReason),
+		Attempts: r.Attempts, NextAttemptAt: r.NextAttemptAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		Lease: deref(r.Lease), TraceID: deref(r.TraceID), RequestID: deref(r.RequestID),
+	}, nil
+}
+
+// deref is *p, or the zero value for a NULL column.
+func deref[T any](p *T) T {
+	if p == nil {
+		var zero T
+		return zero
 	}
-	if journalID != nil {
-		t.JournalID = *journalID
-	}
-	if reason != nil {
-		t.FailureReason = *reason
-	}
-	if lease != nil {
-		t.Lease = *lease
-	}
-	if traceID != nil {
-		t.TraceID = *traceID
-	}
-	if requestID != nil {
-		t.RequestID = *requestID
-	}
-	return t, nil
+	return *p
 }

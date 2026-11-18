@@ -368,3 +368,33 @@ func TestATransferKeepsTheIDsOfTheRequestThatCreatedIt(t *testing.T) {
 		t.Errorf("a transfer from a request with no IDs = %q, %q; want both empty", none.TraceID, none.RequestID)
 	}
 }
+
+// TestRowsAreReadByName: created_at and updated_at are both timestamps, so
+// read by position, swapping them in a query would put each in the other's
+// field without any error. Read by name, the order doesn't matter, and a
+// query missing a column is an error, not a field quietly left empty.
+func TestRowsAreReadByName(t *testing.T) {
+	s := newTestStore(t)
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	if _, err := s.StartAttempt(t.Context(), tr.ID, tr.Lease, time.Minute); err != nil { // moves updated_at on
+		t.Fatal(err)
+	}
+	want, err := s.Get(t.Context(), tr.ID)
+	if err != nil || !want.UpdatedAt.After(want.CreatedAt) {
+		t.Fatalf("Get = %+v, %v; want updated_at after created_at, so a swap would show", want, err)
+	}
+
+	swapped := strings.Replace(columns, "created_at, updated_at", "updated_at, created_at", 1)
+	if swapped == columns {
+		t.Fatal("test is stale: columns no longer lists created_at, updated_at together")
+	}
+	got, err := s.queryTransfer(t.Context(), `SELECT `+swapped+` FROM transfers WHERE id = $1`, tr.ID)
+	if err != nil || !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Errorf("with the columns swapped: created %v, updated %v, %v; want %v, %v", got.CreatedAt, got.UpdatedAt, err, want.CreatedAt, want.UpdatedAt)
+	}
+
+	missing := strings.Replace(columns, ", trace_id", "", 1)
+	if _, err := s.queryTransfer(t.Context(), `SELECT `+missing+` FROM transfers WHERE id = $1`, tr.ID); err == nil {
+		t.Error("a query missing trace_id was read without an error, want one")
+	}
+}
