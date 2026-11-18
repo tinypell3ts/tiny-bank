@@ -49,6 +49,7 @@ func newPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("open database: invalid DATABASE_URL: %w", err)
 	}
 	cfg.ConnConfig.ConnectTimeout = connectTimeout
+	cfg.ConnConfig.Tracer = queryTracer{} // a span per query inside a request (tracing.go)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
