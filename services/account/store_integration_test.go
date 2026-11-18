@@ -132,3 +132,22 @@ func TestStoreCreateErrorKeepsItsTerror(t *testing.T) {
 		t.Fatalf("err = %v, want bad_request.holder_name with just the reason", err)
 	}
 }
+
+// TestAccountsAreReadByName: id and customer_id are both UUIDs, so read by
+// position, swapping them in a query would hand back the customer's ID as
+// the account's, with no error. Read by name, the order doesn't matter.
+func TestAccountsAreReadByName(t *testing.T) {
+	s := newTestStore(t)
+	want, err := s.Create(t.Context(), NewRequest{CustomerID: uuid.New(), HolderName: "Ada", Currency: money.GBP()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped := strings.Replace(columns, "id, customer_id", "customer_id, id", 1)
+	if swapped == columns {
+		t.Fatal("test is stale: columns no longer starts id, customer_id")
+	}
+	got, err := s.queryAccount(t.Context(), "SELECT "+swapped+" FROM accounts WHERE id = $1", want.ID)
+	if err != nil || got.ID != want.ID || got.CustomerID != want.CustomerID {
+		t.Errorf("with the columns swapped: id %s, customer %s, %v; want %s, %s", got.ID, got.CustomerID, err, want.ID, want.CustomerID)
+	}
+}

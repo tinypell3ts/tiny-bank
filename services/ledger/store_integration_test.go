@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
 	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
@@ -454,4 +455,20 @@ func TestJournalsAndEntriesAreAppendOnly(t *testing.T) {
 		}
 	}
 	wantBalance(t, s, alice, gbp(1000)) // and the balance still matches its entries (checkInvariants)
+}
+
+// TestBalancesAreReadByName: kind and currency are both text, so read by
+// position, swapping them in a query would make "GBP" an account's kind,
+// with no error from the scan. Read by name, the order doesn't matter.
+func TestBalancesAreReadByName(t *testing.T) {
+	s := newTestStore(t)
+	fund(t, s, alice, 1000)
+	swapped := strings.Replace(accountColumns, "kind, currency", "currency, kind", 1)
+	if swapped == accountColumns {
+		t.Fatal("test is stale: accountColumns no longer lists kind, currency together")
+	}
+	got, err := db.QueryOne(t.Context(), s.pool, scanBalance, `SELECT `+swapped+` FROM accounts WHERE id = $1`, alice)
+	if err != nil || got.Kind != KindCustomer || got.Amount != gbp(1000) {
+		t.Errorf("with the columns swapped: %+v, %v; want a customer account holding £10", got, err)
+	}
 }
