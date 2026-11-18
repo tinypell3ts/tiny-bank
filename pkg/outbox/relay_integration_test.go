@@ -108,12 +108,17 @@ func TestARelaySendsEventsInOrderAndDeletesThem(t *testing.T) {
 }
 
 // TestAnEventKafkaWontTakeHoldsBackOnlyItsKey: the events after it with
-// the same key wait, so they never overtake it; other keys' events go. It
-// stays, counted in the backlog, until Kafka takes it.
+// the same key wait, so they never overtake it, however many there are;
+// other keys' events go. It stays, counted in the backlog, until Kafka takes
+// it.
 func TestAnEventKafkaWontTakeHoldsBackOnlyItsKey(t *testing.T) {
 	pool, brokers, relay := setup(t)
-	tooBig := strings.Repeat("x", 2<<20) // over the producer's 1 MB limit
-	for _, e := range [][2]string{{"alice", tooBig}, {"alice", "after"}, {"bob", "other"}} {
+	events := [][2]string{{"alice", strings.Repeat("x", 2<<20)}} // over the producer's 1 MB limit
+	for range batchSize {
+		events = append(events, [2]string{"alice", "after"})
+	}
+	events = append(events, [2]string{"bob", "other"})
+	for _, e := range events {
 		if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
 			return Add(t.Context(), tx, "events", []byte(e[0]), wrapperspb.String(e[1]))
 		}); err != nil {
@@ -121,29 +126,51 @@ func TestAnEventKafkaWontTakeHoldsBackOnlyItsKey(t *testing.T) {
 		}
 	}
 
-	// No deadline of our own: SendBatch must give up by itself, within
-	// sendTimeout, rather than hold its transaction open.
-	start := time.Now()
 	if sent, err := relay.SendBatch(t.Context()); sent != 1 || err == nil {
 		t.Fatalf("SendBatch = %d, %v; want 1 (bob's) and an error", sent, err)
-	}
-	if took := time.Since(start); took > sendTimeout+5*time.Second {
-		t.Errorf("SendBatch took %v, want it to give up after about %v", took, sendTimeout)
 	}
 	if got, _ := read(t, brokers, "events", 2); strings.Join(got, ",") != "other" {
 		t.Errorf("Kafka has %v, want only bob's event: alice's after must wait for her first", got)
 	}
-	if n := waiting(t, pool); n != 2 {
-		t.Errorf("%d events in the outbox, want alice's two", n)
+	if n := waiting(t, pool); n != batchSize+1 {
+		t.Errorf("%d events in the outbox, want alice's %d", n, batchSize+1)
 	}
 	if err := relay.measure(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := testutil.ToFloat64(relay.metrics.waiting); got != 2 {
-		t.Errorf("outbox_waiting_events = %v, want 2", got)
+	if got := testutil.ToFloat64(relay.metrics.waiting); got != batchSize+1 {
+		t.Errorf("outbox_waiting_events = %v, want %d", got, batchSize+1)
 	}
 	if got := testutil.ToFloat64(relay.metrics.oldest); got <= 0 {
 		t.Errorf("outbox_oldest_waiting_seconds = %v, want more than 0", got)
+	}
+}
+
+// TestARelayWhoseKafkaIsGoneGivesUp: with no Kafka answering, SendBatch
+// gives up by itself within sendTimeout, rolls back, keeping the event, and
+// lets go of the relay lock, so another relay sends it.
+func TestARelayWhoseKafkaIsGoneGivesUp(t *testing.T) {
+	pool, _, working := setup(t)
+	gone, err := kfake.NewCluster(kfake.NumBrokers(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := newRelay(t, pool, gone.ListenAddrs())
+	gone.Close()
+	add(t, t.Context(), pool, "events", "waiting")
+
+	start := time.Now()
+	if sent, err := stuck.SendBatch(t.Context()); sent != 0 || err == nil {
+		t.Fatalf("SendBatch = %d, %v; want 0 and an error", sent, err)
+	}
+	if took := time.Since(start); took < sendTimeout/2 || took > sendTimeout+5*time.Second {
+		t.Errorf("SendBatch took %v, want it to wait about %v, then give up", took, sendTimeout)
+	}
+	if n := waiting(t, pool); n != 1 {
+		t.Errorf("%d events in the outbox, want the one", n)
+	}
+	if sent, err := working.SendBatch(t.Context()); sent != 1 || err != nil {
+		t.Errorf("another relay's SendBatch = %d, %v; want 1, nil (the lock let go)", sent, err)
 	}
 }
 

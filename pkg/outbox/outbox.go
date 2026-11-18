@@ -126,8 +126,8 @@ type row struct {
 	Tracestate  string `db:"tracestate"`
 }
 
-// SendBatch sends the oldest waiting event of each key among the oldest
-// batchSize events, all together, and deletes those Kafka stored, in one
+// SendBatch sends the oldest waiting event of each key, up to batchSize of
+// them, all together, and deletes those Kafka stored, in one
 // transaction holding the relay lock, within sendTimeout. A key's next event
 // waits for a later batch, once this one is stored, so a key's events never
 // overtake each other however Kafka answers. It returns how many it sent: 0
@@ -143,7 +143,13 @@ func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 		if !locked {
 			return nil // another pod is relaying
 		}
-		rows, err := tx.Query(ctx, `SELECT `+db.Columns[row]()+` FROM outbox ORDER BY id LIMIT $1`, batchSize)
+		// The oldest event of each topic and key, oldest first: a key's later
+		// events wait for a later batch, and however many a stuck key has
+		// waiting, other keys still get their turn. outbox_key makes the
+		// NOT EXISTS an index lookup.
+		rows, err := tx.Query(ctx, `SELECT `+db.Columns[row]()+` FROM outbox o
+			WHERE NOT EXISTS (SELECT 1 FROM outbox e WHERE e.topic = o.topic AND e.key = o.key AND e.id < o.id)
+			ORDER BY id LIMIT $1`, batchSize)
 		if err != nil {
 			return fmt.Errorf("read outbox: %w", err)
 		}
@@ -151,18 +157,12 @@ func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("read outbox: %w", err)
 		}
-		var ids []int64
-		var outgoing []kafka.Outgoing
-		keys := map[string]bool{}
-		for _, e := range waiting {
-			key := e.Topic + "\x00" + string(e.Key)
-			if keys[key] {
-				continue // its key's earlier event goes first
-			}
-			keys[key] = true
+		ids := make([]int64, len(waiting))
+		outgoing := make([]kafka.Outgoing, len(waiting))
+		for i, e := range waiting {
 			trace := otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": e.Traceparent, "tracestate": e.Tracestate})
-			ids = append(ids, e.ID)
-			outgoing = append(outgoing, kafka.Outgoing{Topic: e.Topic, Key: e.Key, Value: e.Value, Trace: trace})
+			ids[i] = e.ID
+			outgoing[i] = kafka.Outgoing{Topic: e.Topic, Key: e.Key, Value: e.Value, Trace: trace}
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
 		errs := r.producer.ProduceAll(sendCtx, outgoing)

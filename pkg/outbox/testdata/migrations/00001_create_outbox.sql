@@ -13,5 +13,8 @@ CREATE TABLE outbox (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- The relay picks the oldest waiting event of each topic and key.
+CREATE INDEX outbox_key ON outbox (topic, key, id);
+
 -- +goose Down
 DROP TABLE outbox;
