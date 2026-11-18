@@ -94,6 +94,7 @@ Current:
 ├── pkg/db/              # Postgres: Run (a whole database service), LoadConfig (kit.Config + DATABASE_URL), Start (connect with retries, then migrate), Open a pgx pool (with a span per query inside a request), Columns and QueryOne for reading rows by name, Migrate with goose behind an advisory lock
 │   └── dbtest/          # integration tests' Postgres (testcontainers): Database/Migrated (a fresh database on one server per package), StartPostgres (a server of its own)
 ├── pkg/funding/         # the ledger's funding accounts (one per currency, fixed IDs): where deposits come from
+├── pkg/kafka/           # Kafka on franz-go: Producer (waits until stored, idempotent, keyed so one key keeps its order), traces through a traceparent header; KAFKA_BROKERS
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow; MaxAmount, the largest single movement
 ├── proto/               # protobuf contracts (buf), one versioned package per service API, plus generated Go
 ├── deploy/
