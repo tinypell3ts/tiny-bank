@@ -34,8 +34,9 @@ func produce(t *testing.T, brokers []string, topic string, messages ...[2]string
 	}
 }
 
-// consume runs Consume in the background until the test ends.
-func consume(t *testing.T, brokers []string, group, topic string, handle Handler) {
+// consume runs Consume in the background until the test ends, or until
+// the stop it returns is called, which waits for Consume to return.
+func consume(t *testing.T, brokers []string, group, topic string, handle Handler) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -45,7 +46,9 @@ func consume(t *testing.T, brokers []string, group, topic string, handle Handler
 			t.Error(err)
 		}
 	}()
-	t.Cleanup(func() { cancel(); <-done })
+	stop = func() { cancel(); <-done }
+	t.Cleanup(stop)
+	return stop
 }
 
 // eventually waits up to 20s for ok.
@@ -84,30 +87,47 @@ func (h *handled) values() string {
 	return strings.Join(vs, ",")
 }
 
-// TestAGroupSharesTheWork: two members of one group split the partitions
-// between them, and between them every message is handled.
+// TestAGroupSharesTheWork: two members of one group split the partitions,
+// and when a partition moves from one to the other, the first stops
+// handling it before the second starts, so no message succeeds twice.
 func TestAGroupSharesTheWork(t *testing.T) {
 	brokers := newKafka(t, "transfers", 4)
-	var a, b handled
-	consume(t, brokers, "share", "transfers", func(_ context.Context, m Message) error { a.add(m); return nil })
-	consume(t, brokers, "share", "transfers", func(_ context.Context, m Message) error { b.add(m); return nil })
-	time.Sleep(3 * time.Second) // let both join before anything is sent
-
 	var sent [][2]string
 	for i := range 40 {
 		sent = append(sent, [2]string{fmt.Sprintf("account-%d", i), fmt.Sprint(i)})
 	}
 	produce(t, brokers, "transfers", sent...)
 
-	eventually(t, "every message handled", func() bool {
-		seen := map[string]bool{}
-		for _, m := range append(a.all(), b.all()...) {
-			seen[string(m.Value)] = true
+	// Both members fail every message until each has been offered one, so
+	// whichever joins first is still retrying when its partitions move.
+	var a, b, succeeded handled
+	member := func(me *handled) Handler {
+		return func(_ context.Context, m Message) error {
+			me.add(m)
+			if len(a.all()) == 0 || len(b.all()) == 0 {
+				return errors.New("waiting for the other member")
+			}
+			succeeded.add(m)
+			return nil
 		}
-		return len(seen) == 40
-	})
-	if len(a.all()) == 0 || len(b.all()) == 0 {
-		t.Errorf("one member handled everything (%d and %d), want the partitions shared", len(a.all()), len(b.all()))
+	}
+	consume(t, brokers, "share", "transfers", member(&a))
+	eventually(t, "the first member retrying", func() bool { return len(a.all()) > 0 })
+	consume(t, brokers, "share", "transfers", member(&b))
+
+	eventually(t, "every message handled", func() bool { return len(succeeded.all()) >= 40 })
+	time.Sleep(2 * retryPause) // a member still handling a partition it lost would show by now
+	seen := map[string]int{}
+	for _, m := range succeeded.all() {
+		seen[string(m.Value)]++
+	}
+	for value, n := range seen {
+		if n > 1 {
+			t.Errorf("message %s succeeded %d times, want once", value, n)
+		}
+	}
+	if len(seen) != 40 {
+		t.Errorf("%d distinct messages handled, want 40", len(seen))
 	}
 }
 
@@ -133,29 +153,61 @@ func TestAFailedMessageIsRetriedAndHoldsItsPartition(t *testing.T) {
 	}
 }
 
-// TestAMessageNotCommittedIsHandledAgain: a consumer that handles a message
-// but stops before committing it (a crash, a deploy) leaves it for the next
-// member of the group: at least once, never lost.
-func TestAMessageNotCommittedIsHandledAgain(t *testing.T) {
-	brokers := newKafka(t, "transfers", 1)
-	produce(t, brokers, "transfers", [2]string{"alice", "deposit"})
-
-	ctx, stop := context.WithCancel(t.Context())
-	var first handled
-	if err := Consume(ctx, brokers, "redeliver", []string{"transfers"}, func(_ context.Context, m Message) error {
-		first.add(m)
-		stop() // "crash" after handling, before the commit
-		return nil
-	}, discard); err != nil {
-		t.Fatal(err)
+// TestAStuckPartitionDoesntHoldUpTheOthers: while one partition's message
+// keeps failing, the other partitions' messages are still handled.
+func TestAStuckPartitionDoesntHoldUpTheOthers(t *testing.T) {
+	brokers := newKafka(t, "transfers", 2)
+	var sent [][2]string
+	for i := range 20 {
+		sent = append(sent, [2]string{fmt.Sprintf("account-%d", i), fmt.Sprint(i)})
 	}
-	if first.values() != "deposit" {
-		t.Fatalf("first consumer handled %q, want deposit", first.values())
+	produce(t, brokers, "transfers", sent...)
+	onPartition1 := 0
+	for _, r := range readAll(t, brokers, "transfers", 20) {
+		if r.Partition == 1 {
+			onPartition1++
+		}
+	}
+
+	var succeeded handled
+	consume(t, brokers, "stuck", "transfers", func(_ context.Context, m Message) error {
+		if m.Partition == 0 {
+			return errors.New("ledger down")
+		}
+		succeeded.add(m)
+		return nil
+	})
+	eventually(t, "partition 1 handled while partition 0 is stuck", func() bool { return len(succeeded.all()) == onPartition1 })
+}
+
+// TestAStoppingMemberCommitsWhatItHandled: when a member stops (a deploy)
+// just as a handler succeeds, that message is committed, and the next
+// member carries on after it: nothing lost, and nothing handled twice just
+// because of the deploy.
+func TestAStoppingMemberCommitsWhatItHandled(t *testing.T) {
+	brokers := newKafka(t, "transfers", 1)
+	produce(t, brokers, "transfers", [2]string{"alice", "one"}, [2]string{"alice", "two"}, [2]string{"alice", "three"})
+
+	var first handled
+	stop := consume(t, brokers, "redeliver", "transfers", func(ctx context.Context, m Message) error {
+		first.add(m)
+		if string(m.Value) == "two" {
+			<-ctx.Done() // still working when the deploy starts, then done
+		}
+		return nil
+	})
+	eventually(t, "two offered", func() bool { return first.values() == "one,two" })
+	stop()
+	if first.values() != "one,two" {
+		t.Fatalf("the stopping member handled %s, want one,two", first.values())
 	}
 
 	var second handled
 	consume(t, brokers, "redeliver", "transfers", func(_ context.Context, m Message) error { second.add(m); return nil })
-	eventually(t, "the uncommitted message handled again", func() bool { return second.values() == "deposit" })
+	eventually(t, "the next member handling", func() bool { return second.values() != "" })
+	if second.values() != "three" {
+		t.Errorf("the next member handled %s, want only three", second.values())
+	}
 }
 
 // TestTheTraceTravelsThroughKafka: the handler runs in a process span, in the
