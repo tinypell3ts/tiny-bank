@@ -16,6 +16,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kafka"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
@@ -60,7 +62,11 @@ func read(t *testing.T, brokers []string, topic string, n int) ([]string, []*kgo
 	}
 	var values []string
 	for _, r := range records {
-		values = append(values, string(r.Value[2:])) // a wrapperspb.String: a 2-byte tag and length, then the text
+		var event wrapperspb.StringValue
+		if err := proto.Unmarshal(r.Value, &event); err != nil {
+			t.Fatal(err)
+		}
+		values = append(values, event.GetValue())
 	}
 	return values, records
 }
@@ -104,10 +110,14 @@ func TestAnEventKafkaWontTakeHoldsBackTheRest(t *testing.T) {
 	add(t, t.Context(), pool, "no-such-topic", "stuck")
 	add(t, t.Context(), pool, "events", "behind")
 
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	if sent, err := relay.SendBatch(ctx); sent != 0 || err == nil {
+	// No deadline of our own: SendBatch must give up by itself, within
+	// sendTimeout, rather than hold its transaction open.
+	start := time.Now()
+	if sent, err := relay.SendBatch(t.Context()); sent != 0 || err == nil {
 		t.Fatalf("SendBatch = %d, %v; want 0 and an error", sent, err)
+	}
+	if took := time.Since(start); took > sendTimeout+5*time.Second {
+		t.Errorf("SendBatch took %v, want it to give up after about %v", took, sendTimeout)
 	}
 	if n := waiting(t, pool); n != 2 {
 		t.Errorf("%d events in the outbox, want both", n)

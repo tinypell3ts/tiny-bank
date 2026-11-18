@@ -7,6 +7,9 @@
 // event is saved instead, in an outbox table, in the same transaction as the
 // change (Add). A Relay, running beside the service, sends what's in the
 // table to Kafka, in order, and deletes each event once Kafka has stored it.
+// Order is the order rows were inserted, which is commit order only for
+// transactions that don't overlap: never add events for one key from two
+// transactions at once.
 //
 // Delivery is at least once: a relay that stops after sending but before
 // deleting sends that event again. So every event carries its own ID, and
@@ -22,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -61,6 +65,11 @@ const (
 	// pollInterval is how long a relay waits when there was nothing to send,
 	// another pod was relaying, or sending failed.
 	pollInterval = 200 * time.Millisecond
+	// sendTimeout bounds a batch's sends, so a relay whose Kafka is down
+	// gives up and rolls back rather than holding its transaction open.
+	sendTimeout = 10 * time.Second
+	// measureInterval is how often a relay sets its backlog metrics.
+	measureInterval = time.Second
 	// relayLock is the advisory lock a relay holds while it sends a batch,
 	// so only one pod sends at a time and events keep their order. Every
 	// service has its own database, so one key is enough.
@@ -82,15 +91,17 @@ func NewRelay(pool *pgxpool.Pool, producer *kafka.Producer, logger *slog.Logger,
 }
 
 // Run sends events until ctx ends. Run it on every pod: they take turns, one
-// batch at a time.
+// batch at a time. It measures the backlog every measureInterval meanwhile,
+// even while a batch is stuck.
 func (r *Relay) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Go(func() { r.measureEvery(ctx) })
+
 	for ctx.Err() == nil {
 		sent, err := r.SendBatch(ctx)
 		if err != nil && ctx.Err() == nil {
 			r.logger.ErrorContext(ctx, "outbox relay", "error", err)
-		}
-		if err := r.measure(ctx); err != nil && ctx.Err() == nil {
-			r.logger.ErrorContext(ctx, "outbox backlog", "error", err)
 		}
 		if sent == batchSize {
 			continue // there may be more waiting
@@ -112,10 +123,11 @@ type row struct {
 	Tracestate  string `db:"tracestate"`
 }
 
-// SendBatch sends the oldest events waiting, in the order they were added,
-// and deletes those Kafka stored, all in one transaction holding the relay
-// lock. It stops at the first event Kafka doesn't take, so nothing is sent
-// ahead of it. It returns how many it sent: 0 if another pod holds the lock.
+// SendBatch sends the oldest events waiting, together and in the order they
+// were added, and deletes those Kafka stored, all in one transaction holding
+// the relay lock, within sendTimeout. Only events before the first that
+// Kafka didn't take are deleted, so nothing is sent ahead of it for good.
+// It returns how many it sent: 0 if another pod holds the lock.
 func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 	var sent []int64
 	var sendErr error
@@ -135,12 +147,18 @@ func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("read outbox: %w", err)
 		}
-		for _, e := range waiting {
+		outgoing := make([]kafka.Outgoing, len(waiting))
+		for i, e := range waiting {
 			trace := otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": e.Traceparent, "tracestate": e.Tracestate})
-			if sendErr = r.producer.Produce(trace, e.Topic, e.Key, e.Value); sendErr != nil {
-				sendErr = fmt.Errorf("send event %d: %w", e.ID, sendErr)
-				break // the rest wait, so they stay in order
-			}
+			outgoing[i] = kafka.Outgoing{Topic: e.Topic, Key: e.Key, Value: e.Value, Trace: trace}
+		}
+		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
+		stored, err := r.producer.ProduceAll(sendCtx, outgoing)
+		cancel()
+		if err != nil {
+			sendErr = fmt.Errorf("send event %d: %w", waiting[stored].ID, err)
+		}
+		for _, e := range waiting[:stored] {
 			sent = append(sent, e.ID)
 		}
 		if len(sent) == 0 {
@@ -157,6 +175,19 @@ func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 	}
 	r.metrics.sent.Add(float64(len(sent)))
 	return len(sent), sendErr
+}
+
+func (r *Relay) measureEvery(ctx context.Context) {
+	for {
+		if err := r.measure(ctx); err != nil && ctx.Err() == nil {
+			r.logger.ErrorContext(ctx, "outbox backlog", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(measureInterval):
+		}
+	}
 }
 
 // measure sets the backlog metrics: how many events are waiting, and how
