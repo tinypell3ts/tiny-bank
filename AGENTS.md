@@ -62,6 +62,8 @@ Describe tiny-bank as a core banking platform. In README, `AGENTS.md`, docs, ADR
 
 **No phase or PR numbers in code, comments or docs**, except ADRs and `docs/phases/`, which record when and why. Plans move and numbers go stale, so say what's true now instead: "services don't send traces yet", not "services send traces in Phase 8b"; "until there's sign-in", not "until Phase 12". Commit messages and PR descriptions may name them.
 
+**Code and comments don't cite ADRs either.** A comment says what the code does and why, in its own words: "franz-go, for its in-memory test Kafka", not "see ADR-0012". ADRs get renumbered and superseded, and a reader shouldn't need one open to understand the code. Docs (README, `docs/`, `AGENTS.md`) may link ADRs.
+
 ## Repo layout
 
 Current:
