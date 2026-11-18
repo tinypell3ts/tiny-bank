@@ -20,6 +20,11 @@ CNPG_CHART_VERSION := 0.29.1
 JAEGER_CHART_REPO    := https://jaegertracing.github.io/helm-charts
 JAEGER_CHART_VERSION := 4.16.1
 
+# Strimzi operator: runs Kafka (KRaft, no ZooKeeper) for the Kafka objects in
+# the "kafka" namespace.
+STRIMZI_CHART         := oci://quay.io/strimzi-helm/strimzi-kafka-operator
+STRIMZI_CHART_VERSION := 1.3.1
+
 # kubeconform only knows built-in Kubernetes types. Schemas for custom ones
 # (like ServiceMonitor) come from the CRDs catalog, pinned to one commit so a
 # change upstream can't break or loosen our checks.
@@ -30,7 +35,7 @@ CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdd
 PROTO_AGAINST ?= main
 
 .PHONY: help fmt fmt-check vet lint test test-integration test-scripts check load-journals hooks proto proto-check docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down strimzi strimzi-down dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -161,6 +166,14 @@ jaeger: ## Install or upgrade Jaeger (traces) in the "jaeger" namespace (make de
 
 jaeger-down: ## Remove Jaeger (its traces are in memory, so they go too)
 	helm uninstall jaeger --kube-context $(KUBECTX) --namespace jaeger
+
+strimzi: ## Install or upgrade the Strimzi operator (runs Kafka) in the "kafka" namespace (make dev does this too)
+	helm upgrade --install strimzi $(STRIMZI_CHART) --version $(STRIMZI_CHART_VERSION) \
+		--kube-context $(KUBECTX) --namespace kafka --create-namespace \
+		-f deploy/strimzi/values.yaml --wait --timeout 5m
+
+strimzi-down: ## Remove the Strimzi operator (its CRDs stay; delete Kafka clusters first, as their data goes with them)
+	helm uninstall strimzi --kube-context $(KUBECTX) --namespace kafka
 
 dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
 	tilt up --context $(KUBECTX)

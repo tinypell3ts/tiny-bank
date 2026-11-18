@@ -59,6 +59,9 @@ flowchart LR
         subgraph cnpgns [namespace: cnpg-system]
             cnpg[CloudNativePG operator]
         end
+        subgraph kns [namespace: kafka]
+            strimzi[Strimzi operator]
+        end
         subgraph jns [namespace: jaeger]
             jaeger[Jaeger v2<br/>OTLP in, traces in memory]
         end
@@ -66,6 +69,7 @@ flowchart LR
     tilt -->|make monitoring: kube-prometheus-stack| mon
     tilt -->|make cnpg| cnpgns
     tilt -->|make jaeger| jns
+    tilt -->|make strimzi| kns
     dev -->|localhost:8080 port-forward| pod
     dev -->|localhost:8081 port-forward| apod
     dev -->|localhost:8082 port-forward| lpod
@@ -82,6 +86,7 @@ flowchart LR
 - **Deploy:** one shared Helm chart plus a small values file per service (`deploy/values/hello.yaml`, `account.yaml`, `ledger.yaml`, `transaction.yaml`). The chart also creates a `ServiceMonitor`, so Prometheus scrapes every service.
 - **Dev loop:** Tilt rebuilds and redeploys on save.
 - **Monitoring:** kube-prometheus-stack (Prometheus Operator, Prometheus, Grafana, kube-state-metrics) in the `monitoring` namespace, installed by `make monitoring`. See [observability.md](observability.md).
+- **Kafka:** the [Strimzi](https://strimzi.io) operator in the `kafka` namespace, installed by `make strimzi`. It turns a `Kafka` object into running brokers, with their storage and config, as CloudNativePG does for Postgres. Strimzi 1.x runs Kafka in KRaft mode, with no ZooKeeper. No Kafka cluster runs yet.
 - **Tracing:** [Jaeger](https://www.jaegertracing.io) v2 in the `jaeger` namespace, installed by `make jaeger`: all-in-one, receiving traces over OTLP and keeping them in memory. Services don't send it traces yet.
 - **Postgres:** the [CloudNativePG](https://cloudnative-pg.io) operator in `cnpg-system`, installed by `make cnpg`. It turns each `Cluster` object into a running Postgres, with its users, passwords, storage and failover. A service turns on `database.enabled` in its values file, and the shared chart gives it its own Postgres `Cluster` (`<name>-db`), with its connection string passed in as `DATABASE_URL`.
 - **Account service:** `cmd/account` plus `services/account`. It connects to `account-db` and applies its migrations before serving, and offers `POST /accounts` and `GET /accounts/:id` on Typhon, as JSON following its contract, `proto/account/v1`. It's internal only (ClusterIP, no sign-in) until the edge gateway.

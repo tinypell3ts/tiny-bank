@@ -104,6 +104,17 @@ local_resource(
     labels=['tracing'],
 )
 
+# --- Kafka: the Strimzi operator ---
+# Same pattern: plain Helm through `make strimzi`, rerun only when its values
+# change, left running by `tilt down`. It runs Kafka for the Kafka objects in
+# the "kafka" namespace.
+local_resource(
+    'strimzi',
+    cmd='make strimzi',
+    deps=['deploy/strimzi/values.yaml'],
+    labels=['kafka'],
+)
+
 def forward(name, service, port, target, namespace='monitoring', dep='monitoring', label='monitoring'):
     """Forward localhost:<port> (localhost only) to a service in namespace, once dep is up."""
     local_resource(

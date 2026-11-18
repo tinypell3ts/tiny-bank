@@ -1,0 +1,26 @@
+# Strimzi operator settings for the LOCAL kind cluster.
+# Installed by `make strimzi` (and by `make dev` through the Tiltfile).
+# The chart version is pinned in the Makefile (STRIMZI_CHART_VERSION).
+#
+# The operator only watches for Strimzi objects (a `Kafka`, its
+# `KafkaNodePool`s, `KafkaTopic`s) and runs Kafka for them: the brokers, their
+# storage, their config, rolling restarts and upgrades. It's to Kafka what
+# CloudNativePG is to Postgres. Strimzi 1.x runs Kafka in KRaft mode only, so
+# there's no ZooKeeper.
+#
+# It's installed in the `kafka` namespace and, with watchNamespaces empty,
+# watches only that one: the Kafka cluster lives there too.
+#
+# The chart's own pod settings already match ours: non-root, a read-only root
+# filesystem, no privilege escalation, all capabilities dropped and the
+# default seccomp profile, so they aren't repeated here.
+
+watchNamespaces: []
+
+# The chart's defaults (384Mi, request 200m CPU) suit one small cluster.
+resources:
+  requests:
+    cpu: 200m
+    memory: 384Mi
+  limits:
+    memory: 384Mi
