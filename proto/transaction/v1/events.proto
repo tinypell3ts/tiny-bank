@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+// The events the transaction service publishes on Kafka, for other services
+// to react to: a notification, a customer's feed, fraud checks.
+//
+// Each is binary protobuf on its topic. Delivery is at least once, so an
+// event can arrive more than once: skip an event_id you've already handled.
+// Read events leniently, ignoring fields and enum values you don't know, as
+// new ones are added.
+//
+// Events are announcements, not the record: the transfer itself (GET
+// /transfers/:id) and the ledger's journals are the truth.
+package transaction.v1;
+
+import "google/protobuf/timestamp.proto";
+import "transaction/v1/transaction.proto";
+
+option go_package = "github.com/tinypell3ts/tiny-bank/proto/transaction/v1;transactionv1";
+
+// A transfer was saved or changed state: sent when it's created (pending),
+// and again when it's completed or failed. On the topic
+// transaction.transfers, keyed by the transfer's ID, so one transfer's
+// events arrive in the order they happened.
+message TransferChanged {
+  // A UUID, lower-case with dashes, for this event. The same event sent
+  // twice has the same event_id.
+  string event_id = 1;
+  // When the change was saved.
+  google.protobuf.Timestamp occurred_at = 2;
+  // The transfer as it was just after the change. Its state says what
+  // happened: PENDING (created), COMPLETED (the money moved) or FAILED (no
+  // money moved; failure_reason says why).
+  Transfer transfer = 3;
+}

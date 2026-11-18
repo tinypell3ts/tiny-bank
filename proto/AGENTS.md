@@ -12,8 +12,11 @@ proto/
 ├── buf.gen.yaml              # generates Go next to each .proto, with the protoc-gen-go pinned in go.mod
 └── <service>/v<N>/           # one versioned package per service API, such as account/v1
     ├── <service>.proto       # the contract
-    └── <service>.pb.go       # generated: never edit, always commit
+    ├── events.proto          # the events it publishes on Kafka, if any (transaction/v1)
+    └── *.pb.go               # generated: never edit, always commit
 ```
+
+An event is a contract too, read by consumers that may be deployed before or after the service that sends it. The rules below apply to it as to a response: consumers read events leniently, so a new field or enum value is safe, and a published field is never renamed, retyped or renumbered.
 
 ## Rules
 
