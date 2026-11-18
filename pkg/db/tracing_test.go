@@ -2,17 +2,22 @@ package db
 
 import "testing"
 
-func TestOperationOf(t *testing.T) {
+func TestSummaryOf(t *testing.T) {
 	for sql, want := range map[string]string{
-		"SELECT id FROM journals WHERE id = $1":       "SELECT",
-		"\n\t  insert into journals (id) values ($1)": "INSERT",
-		"UPDATE\ntransfers SET state = $2":            "UPDATE",
-		"begin":                                       "BEGIN",
-		"commit;":                                     "COMMIT",
-		"  ":                                          "QUERY",
+		"UPDATE transfers SET lease = gen_random_uuid() WHERE id = $1":               "UPDATE transfers",
+		"UPDATE accounts AS a SET balance = v.balance FROM unnest($1::uuid[])":       "UPDATE accounts",
+		"\n\t  insert into journals (idempotency_key) values ($1)":                   "INSERT journals",
+		"SELECT count(*), min(created_at) FROM transfers WHERE state = 'pending'":    "SELECT transfers",
+		"SELECT id, balance FROM accounts WHERE id = ANY($1) ORDER BY id FOR UPDATE": "SELECT accounts FOR UPDATE",
+		"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))":                      "SELECT pg_advisory_xact_lock",
+		"SELECT j.id FROM (SELECT $1::text AS key) k LEFT JOIN journals j":           "SELECT", // a subquery: no plain name
+		"SELECT $1::int": "SELECT",
+		"begin":          "BEGIN",
+		"commit;":        "COMMIT",
+		"  ":             "QUERY",
 	} {
-		if got := operationOf(sql); got != want {
-			t.Errorf("operationOf(%q) = %q, want %q", sql, got, want)
+		if got := summaryOf(sql); got != want {
+			t.Errorf("summaryOf(%q) = %q, want %q", sql, got, want)
 		}
 	}
 }
