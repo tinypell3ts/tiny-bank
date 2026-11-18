@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -75,9 +76,13 @@ func NewProducer(brokers []string) (*Producer, error) {
 	return &Producer{client: client}, nil
 }
 
-// Produce sends value to topic, keyed by key, and returns once Kafka has
-// stored it (or ctx ends). Messages with the same key keep their order. The
-// span in ctx travels with the message as a traceparent header.
+// Produce sends value to topic, keyed by key, and returns nil once Kafka has
+// stored it. Messages with the same key keep their order. The span in ctx
+// travels with the message as a traceparent header.
+//
+// An error doesn't always mean the message wasn't stored: if ctx ends while
+// it's on its way, Kafka may store it anyway. A caller that sends it again
+// may send it twice, which consumers must cope with in any case.
 func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte) error {
 	ctx, span := tracer.Start(ctx, "send "+topic, trace.WithSpanKind(trace.SpanKindProducer),
 		trace.WithAttributes(messagingAttrs(topic)...))
@@ -86,7 +91,7 @@ func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte)
 	record := &kgo.Record{Topic: topic, Key: key, Value: value}
 	otel.GetTextMapPropagator().Inject(ctx, headerCarrier{record})
 	if err := p.client.ProduceSync(ctx, record).FirstErr(); err != nil {
-		obs.FailSpan(span, "_OTHER")
+		obs.FailSpan(span, errorType(err))
 		return fmt.Errorf("send to %s: %w", topic, err)
 	}
 	span.SetAttributes(attribute.Int("messaging.destination.partition.id", int(record.Partition)))
@@ -95,6 +100,15 @@ func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte)
 
 // Close waits for messages still being sent, then disconnects.
 func (p *Producer) Close() { p.client.Close() }
+
+// errorType names err for a span's error.type: Kafka's own error code, like
+// NOT_ENOUGH_REPLICAS, or _OTHER (a timeout, say).
+func errorType(err error) string {
+	if kafkaErr := (*kerr.Error)(nil); errors.As(err, &kafkaErr) {
+		return kafkaErr.Message
+	}
+	return "_OTHER"
+}
 
 // Handler handles one message. Returning an error means "not handled": the
 // message is offered again (after a pause) and its offset isn't committed,

@@ -2,11 +2,13 @@ package kafka
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
@@ -126,6 +128,17 @@ func TestProduceFailsWhenKafkaWontStoreIt(t *testing.T) {
 	spans := exporter.GetSpans()
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
 		t.Errorf("spans = %v, want one failed send span", spans)
+	}
+}
+
+func TestErrorType(t *testing.T) {
+	for err, want := range map[error]string{
+		fmt.Errorf("send: %w", kerr.NotEnoughReplicas): "NOT_ENOUGH_REPLICAS",
+		context.DeadlineExceeded:                       "_OTHER",
+	} {
+		if got := errorType(err); got != want {
+			t.Errorf("errorType(%v) = %q, want %q", err, got, want)
+		}
 	}
 }
 
