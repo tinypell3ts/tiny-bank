@@ -158,6 +158,14 @@ func Consume(ctx context.Context, brokers []string, group string, topics []strin
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topics...),
 		kgo.DisableAutoCommit(), // workers commit what they've handled
+		// If a broker loses messages it had accepted, a member can't tell
+		// exactly where to resume. franz-go's default goes back a minute
+		// before the last message it read, which could skip one that
+		// survived; we start the partition again from its oldest message.
+		// That re-reads up to the topic's retention, which handlers must cope
+		// with anyway. (A new group, or an offset older than the oldest
+		// message, starts at the oldest message either way.)
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.OnPartitionsAssigned(c.start),
 		kgo.OnPartitionsRevoked(c.stop),
 		kgo.OnPartitionsLost(c.stop),
