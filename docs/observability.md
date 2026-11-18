@@ -19,7 +19,7 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 2 | Prometheus metrics (`/metrics`), kube-prometheus-stack, Grafana, a starter RED dashboard ✅ |
 | 5.5 | Shared Typhon filters in `pkg/kit` for request IDs, access logs and RED metrics, applied to every service ✅ |
 | 7 | Request ID passed on to downstream services by `kit.Get`, so one ID follows a request across services, and stored on each journal; ledger business metrics and dashboard ✅ |
-| 8 | Jaeger on the cluster; OpenTelemetry tracing across services |
+| 8 | Jaeger on the cluster; OpenTelemetry tracing across services, database queries and the transaction finisher; trace and request IDs saved on each transfer ✅ |
 | 10–11 | Trace context in Kafka headers, outbox backlog and consumer lag metrics |
 | 13 | Dashboards and alert rules |
 
