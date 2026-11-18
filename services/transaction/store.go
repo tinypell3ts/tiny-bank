@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -25,10 +26,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// columns is selected by every query. scanTransfer reads them by name, so
-// their order doesn't matter, but each must be a field of transferRow.
-const columns = `id, idempotency_key, kind, from_account, to_account, currency, amount, state,
-	journal_id, failure_reason, attempts, next_attempt_at, created_at, updated_at, lease, trace_id, request_id`
+// columns is selected by every query: transferRow's columns, from its db
+// tags, so the columns asked for and the fields they're read into are one
+// list.
+var columns = db.Columns[transferRow]()
 
 // Create saves req as a new pending transfer. created is false when a
 // transfer with req's idempotency key already exists and asks for the same
@@ -261,11 +262,7 @@ type transferRow struct {
 // queryTransfer runs sql, which must return exactly the columns, and reads
 // its one row into a Transfer. No row is pgx.ErrNoRows, as with QueryRow.
 func (s *Store) queryTransfer(ctx context.Context, sql string, args ...any) (Transfer, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return Transfer{}, err
-	}
-	return pgx.CollectOneRow(rows, scanTransfer)
+	return db.QueryOne(ctx, s.pool, scanTransfer, sql, args...)
 }
 
 // scanTransfer reads one row by column name (transferRow) into a Transfer.

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/monzo/terrors"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
@@ -30,10 +31,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// accountColumns is selected by every accounts query. scanBalance reads them
-// by name, so their order doesn't matter, but each must be a field of
-// balanceRow.
-const accountColumns = "id, kind, currency, balance"
+// accountColumns is selected by every accounts query: balanceRow's columns,
+// from its db tags, so the columns asked for and the fields they're read
+// into are one list.
+var accountColumns = db.Columns[balanceRow]()
 
 // errAlreadyPosted rolls back a post whose idempotency key is already taken.
 // It never leaves Post.
@@ -362,11 +363,7 @@ func journal(ctx context.Context, q querier, id uuid.UUID) (Journal, error) {
 // Balance returns how much account id holds, or a terrors not_found if no
 // journal has touched it yet.
 func (s *Store) Balance(ctx context.Context, id uuid.UUID) (Balance, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+accountColumns+` FROM accounts WHERE id = $1`, id)
-	if err != nil {
-		return Balance{}, fmt.Errorf("get balance: %w", err)
-	}
-	b, err := pgx.CollectOneRow(rows, scanBalance)
+	b, err := db.QueryOne(ctx, s.pool, scanBalance, `SELECT `+accountColumns+` FROM accounts WHERE id = $1`, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Balance{}, errAccountNotFound()
 	}
@@ -383,7 +380,7 @@ type balanceRow struct {
 	ID       uuid.UUID `db:"id"`
 	Kind     string    `db:"kind"`
 	Currency string    `db:"currency"`
-	Balance  int64     `db:"balance"`
+	Amount   int64     `db:"balance"` // in minor units
 }
 
 func scanBalance(row pgx.CollectableRow) (Balance, error) {
@@ -395,5 +392,5 @@ func scanBalance(row pgx.CollectableRow) (Balance, error) {
 	if err != nil { // the tables and pkg/money have drifted apart, as in Journal
 		return Balance{}, fmt.Errorf("stored account %s: %w", r.ID, err)
 	}
-	return Balance{AccountID: r.ID, Kind: Kind(r.Kind), Amount: money.New(r.Balance, c)}, nil
+	return Balance{AccountID: r.ID, Kind: Kind(r.Kind), Amount: money.New(r.Amount, c)}, nil
 }

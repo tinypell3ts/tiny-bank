@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/tinypell3ts/tiny-bank/pkg/db"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
 
@@ -26,10 +27,10 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// columns is selected by every query. scanAccount reads them by name, so
-// their order doesn't matter, but each must be a field of accountRow. pgx
-// reads Postgres uuid columns straight into uuid.UUID.
-const columns = "id, customer_id, holder_name, currency, status, created_at"
+// columns is selected by every query: accountRow's columns, from its db
+// tags, so the columns asked for and the fields they're read into are one
+// list. pgx reads Postgres uuid columns straight into uuid.UUID.
+var columns = db.Columns[accountRow]()
 
 // Create opens a new account and returns it, with the ID and created time
 // Postgres assigned. It validates req first, so a bad request returns a
@@ -79,11 +80,7 @@ type accountRow struct {
 // queryAccount runs sql, which must return exactly the columns, and reads its
 // one row into an Account. No row is pgx.ErrNoRows, as with QueryRow.
 func (s *Store) queryAccount(ctx context.Context, sql string, args ...any) (Account, error) {
-	rows, err := s.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return Account{}, err
-	}
-	return pgx.CollectOneRow(rows, scanAccount)
+	return db.QueryOne(ctx, s.pool, scanAccount, sql, args...)
 }
 
 func scanAccount(row pgx.CollectableRow) (Account, error) {
