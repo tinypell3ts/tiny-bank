@@ -35,7 +35,7 @@ CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdd
 PROTO_AGAINST ?= main
 
 .PHONY: help fmt fmt-check vet lint test test-integration test-scripts check load-journals hooks proto proto-check docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down strimzi strimzi-down dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down strimzi strimzi-down kafka kafka-down dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -114,13 +114,15 @@ image-load: docker-build ## Build IMAGE and copy it into the kind cluster's node
 
 # Every service's values, plus deploy/charts/service/ci/*.yaml, which turn on
 # chart features no service uses yet (like a database) so they're checked too.
-chart-check: ## Lint the chart and validate its output for every service (brew install kubeconform)
+chart-check: ## Lint the chart and validate its output for every service, and deploy/kafka/ (brew install kubeconform)
 	@for v in deploy/values/*.yaml $(CHART)/ci/*.yaml; do \
 		echo "--- $$v"; \
 		helm lint $(CHART) -f $$v --strict || exit 1; \
 		helm template $$(basename $$v .yaml) $(CHART) -f $$v | kubeconform -strict -summary \
 			-schema-location default -schema-location '$(CRD_SCHEMAS)' || exit 1; \
 	done
+	@echo "--- deploy/kafka"
+	@kubeconform -strict -summary -schema-location default -schema-location '$(CRD_SCHEMAS)' deploy/kafka/
 
 deploy: docker-build ## Build IMAGE and deploy exactly that build of SERVICE to the kind cluster
 	scripts/deploy.sh $(SERVICE) $(IMAGE) $(CLUSTER)
@@ -174,6 +176,13 @@ strimzi: ## Install or upgrade the Strimzi operator (runs Kafka) in the "kafka" 
 
 strimzi-down: ## Remove the Strimzi operator (its CRDs stay; delete Kafka clusters first, as their data goes with them)
 	helm uninstall strimzi --kube-context $(KUBECTX) --namespace kafka
+
+kafka: ## Create or update the Kafka cluster and topics in deploy/kafka/ (needs make strimzi; make dev does both)
+	kubectl --context $(KUBECTX) apply -f deploy/kafka/
+	kubectl --context $(KUBECTX) -n kafka wait kafka/tiny-bank --for=condition=Ready --timeout=10m
+
+kafka-down: ## Delete the Kafka cluster, INCLUDING every message in it (the operator stays)
+	kubectl --context $(KUBECTX) delete -f deploy/kafka/
 
 dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
 	tilt up --context $(KUBECTX)

@@ -1,0 +1,19 @@
+# Topics, as KafkaTopic objects: the topic operator creates and updates them.
+# A topic is declared here, in git, before anything writes to it
+# (auto.create.topics.enable is off in kafka.yaml).
+#
+# walkthrough is for trying Kafka out by hand (docs/phases): three partitions,
+# so keys, ordering and consumer groups can be seen. Services' own topics
+# arrive with the outbox.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: walkthrough
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: tiny-bank
+spec:
+  partitions: 3
+  replicas: 1
+  config:
+    retention.ms: 86400000 # a day: it's only for trying things out
