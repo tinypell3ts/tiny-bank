@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
@@ -173,7 +172,7 @@ func (s *Service) finishOne(ctx context.Context, logger *slog.Logger, t Transfer
 	span.SetAttributes(attribute.String("transfer.state", string(state)))
 	if err != nil {
 		span.SetStatus(codes.Error, "")
-		logger.ErrorContext(ctx, "finish transfer", "transfer_id", t.ID, "trace_id", kit.TraceIDFrom(ctx), "error", err)
+		logger.ErrorContext(ctx, "finish transfer", "transfer_id", t.ID, "error", err) // the logger adds the attempt's trace_id
 	}
 }
 

@@ -2,6 +2,7 @@ package kit
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -261,5 +262,35 @@ func TestAFailedCallMarksItsSpan(t *testing.T) {
 	a := attrs(unreachable)
 	if _, hasStatus := a["http.response.status_code"]; unreachable.Status.Code != codes.Error || hasStatus || a["error.type"].AsString() != "_OTHER" {
 		t.Errorf("unreachable call = %v %v, want failed, error.type _OTHER and no status code (no response came back), not the internal_service Typhon makes up", a, unreachable.Status)
+	}
+}
+
+// TestEveryLineOfARequestCarriesItsTraceID: a trace ID finds all of a
+// request's lines, so the line with the full error is one grep away, not
+// two. Each line has the trace ID once.
+func TestEveryLineOfARequestCarriesItsTraceID(t *testing.T) {
+	recordSpans(t)
+	h, logs := testServer(t)
+	do(t, h, "/raw", http.Header{"Traceparent": {callerTraceparent}}) // a 500, logged in full by cleanErrors
+
+	var lines int
+	for line := range strings.Lines(logs.String()) {
+		var l struct{ Msg string }
+		_ = json.Unmarshal([]byte(line), &l)
+		if n := strings.Count(line, `"trace_id":"`+callerTraceID+`"`); n != 1 {
+			t.Errorf("line %q has the trace ID %d times, want once", l.Msg, n)
+		}
+		lines++
+	}
+	if lines < 2 {
+		t.Fatalf("got %d log lines, want the error and the access log: %s", lines, logs)
+	}
+}
+
+func TestALineWithNoTraceHasNoTraceID(t *testing.T) {
+	var out strings.Builder
+	NewLogger(&out, slog.LevelInfo, "test").InfoContext(t.Context(), "starting")
+	if strings.Contains(out.String(), "trace_id") {
+		t.Errorf("line = %s, want no trace_id when there's no trace", out.String())
 	}
 }
