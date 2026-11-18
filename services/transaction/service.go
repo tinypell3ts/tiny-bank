@@ -11,12 +11,12 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
 const (
@@ -147,9 +147,8 @@ func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, erro
 	return tried, nil
 }
 
-// tracerName is the instrumentation scope of the transaction service's own
-// spans.
-const tracerName = "github.com/tinypell3ts/tiny-bank/services/transaction"
+// tracer starts the transaction service's own spans.
+var tracer = obs.NewTracer("github.com/tinypell3ts/tiny-bank/services/transaction")
 
 // finishOne makes the finisher's attempt at t, as the root of a trace of its
 // own: the finisher works outside any request, so there's no trace to join.
@@ -163,7 +162,7 @@ func (s *Service) finishOne(ctx context.Context, logger *slog.Logger, t Transfer
 	if t.TraceID != "" {
 		attrs = append(attrs, attribute.String("transfer.created_trace_id", t.TraceID))
 	}
-	ctx, span := otel.Tracer(tracerName).Start(ctx, "finish transfer", trace.WithNewRoot(), trace.WithAttributes(attrs...))
+	ctx, span := tracer.Start(ctx, "finish transfer", trace.WithNewRoot(), trace.WithAttributes(attrs...))
 	defer span.End()
 
 	finished, err := s.attempt(ctx, t, byFinisher, 1)
