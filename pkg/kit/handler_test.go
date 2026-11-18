@@ -55,7 +55,7 @@ func testServer(t *testing.T) (http.Handler, *bytes.Buffer) {
 	router.GET("/cancelled-inside", func(req typhon.Request) typhon.Response {
 		return typhon.Response{Error: fmt.Errorf("get thing: %w", context.Canceled)}
 	})
-	h := Handler(slog.New(slog.NewJSONHandler(&logs, nil)), obs.NewRegistry(), &router, readyNow(), nil)
+	h := Handler(NewLogger(&logs, slog.LevelInfo, "test"), obs.NewRegistry(), &router, readyNow(), nil)
 	return h, &logs
 }
 

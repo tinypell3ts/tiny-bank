@@ -8,7 +8,7 @@ A change here reaches every service at once, so it gets more care than service c
 
 ```
 pkg/kit/
-├── kit.go        # Main (signals, exit code, Go's memory limit from memory.go, tracing started and flushed with obs.StartTracing) and NewLogger
+├── kit.go        # Main (signals, exit code, Go's memory limit from memory.go, tracing started and flushed with obs.StartTracing) and NewLogger (JSON, with trace_id added from the context)
 ├── memory.go     # memoryLimitFor: 90% of the container's memory limit, for Go's garbage collector
 ├── config.go     # Config and LoadConfig: PORT, LOG_LEVEL, SHUTDOWN_TIMEOUT
 ├── secret.go     # Secret: prints as xxxxx everywhere; Reveal() is the only way in
@@ -35,7 +35,7 @@ pkg/kit/
 1. **Request ID**, so everything inside can log it.
 2. **Tracing**: a server span per request (`tracing.go`), continuing the caller's `traceparent`, so the span covers everything below and the access log can carry its trace ID. Named and labelled like the metrics: method, route pattern (`routeOf`), status and the terror code, never a raw path. Only a 5xx marks it failed. Probes get no span.
 3. **Deadline**: the caller's `X-Request-Timeout`, capped at 30s, put on the request's context. When it passes, the request is answered 504 (clean errors tells a passed deadline, `context.DeadlineExceeded`, from a caller hanging up, `context.Canceled`, which stays 499).
-4. **Access log**, one line per request, with `request_id` and `trace_id`.
+4. **Access log**, one line per request, with `request_id`; like every line logged with the request's context, it gets `trace_id` from `NewLogger`.
 5. **Metrics**, outside `ErrorFilter` so they see the final status. The route label comes from `routeOf`: the routed request, or `router.Pattern` when a response doesn't carry it (the 500 after a panic).
 6. **Typhon's `ErrorFilter`**, which turns a returned error into a response with the right status.
 7. **Clean errors**, just inside `ErrorFilter`, so the error it serialises is already safe: only a terror's code, message and params; stack and message chain stripped; anything else logged and replaced with a generic 500; 499 when the caller has gone.

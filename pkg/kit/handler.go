@@ -98,7 +98,6 @@ func accessLogFilter(logger *slog.Logger) typhon.Filter {
 		rsp := next(req)
 		logger.LogAttrs(req.Context, slog.LevelInfo, "http request",
 			slog.String("request_id", RequestIDFrom(req.Context)),
-			slog.String("trace_id", TraceIDFrom(req.Context)),
 			slog.String("method", req.Method),
 			slog.String("path", req.URL.Path),
 			slog.Int("status", statusOf(rsp)),

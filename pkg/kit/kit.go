@@ -70,7 +70,31 @@ func Main(name string, run func(ctx context.Context, getenv func(string) string,
 const tracingFlushTimeout = 3 * time.Second
 
 // NewLogger returns a JSON logger to out at level. Every line carries
-// "service": name, so lines from different services can be told apart.
+// "service": name, so lines from different services can be told apart, and
+// every line logged with a context inside a trace (logger.ErrorContext(ctx,
+// …), as the kit's own request logging is) carries its "trace_id", so a
+// trace ID finds all of a request's lines, the full error included.
 func NewLogger(out io.Writer, level slog.Level, name string) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: level})).With("service", name)
+	return slog.New(traceIDHandler{slog.NewJSONHandler(out, &slog.HandlerOptions{Level: level})}).With("service", name)
+}
+
+// traceIDHandler adds "trace_id" (TraceIDFrom) to each line logged with a
+// context that has one, before handing it to the handler it wraps.
+type traceIDHandler struct{ slog.Handler }
+
+func (h traceIDHandler) Handle(ctx context.Context, r slog.Record) error {
+	if id := TraceIDFrom(ctx); id != "" {
+		r.AddAttrs(slog.String("trace_id", id))
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+// WithAttrs and WithGroup keep the wrapper, so a logger made with With still
+// adds the trace ID.
+func (h traceIDHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return traceIDHandler{h.Handler.WithAttrs(attrs)}
+}
+
+func (h traceIDHandler) WithGroup(name string) slog.Handler {
+	return traceIDHandler{h.Handler.WithGroup(name)}
 }
