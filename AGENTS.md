@@ -27,12 +27,12 @@ The target runtime is **Docker on Kubernetes**: a local kind cluster, services d
 
 Format `<type>/<description>`, trunk is `main`.
 
-- Types: `feature/` (alias `feat/`), `bugfix/` (alias `fix/`), `hotfix/`, `release/`, `chore/`.
+- Types: `feature/` (alias `feat/`), `bugfix/` (alias `fix/`), `hotfix/`, `refactor/`, `release/`, `chore/`. Use `refactor/` for a branch that only restructures code, such as moving shared code into `pkg/`, so it matches its `refactor:` commits.
 - Lowercase `a-z`, `0-9` and hyphens only. Dots are allowed only in release versions (`release/v1.2.0`). No leading, trailing or repeated hyphens or dots.
 - Optional ticket ref: `feature/issue-12-ledger-postings`.
-- Examples: `feature/phase-0-foundations`, `chore/bump-go`.
+- Examples: `feature/phase-0-foundations`, `refactor/obs-tracer`, `chore/bump-go`.
 - **Never use vendor or agent prefixes** such as `claude/`, `copilot/` or `codex/`.
-- **This is deliberately stricter than the published spec** ([conventionalbranch.org](https://conventionalbranch.org)), which allows dots in any branch, AI-agent types like `claude/`, and any description after `release/`. We allow dots only in versions, ban agent types, and require `release/` to be a version. The rule lives in `scripts/check-branch-name.sh`, which `scripts/check-branch-name_test.sh` tests.
+- **This is deliberately stricter than the published spec** ([conventionalbranch.org](https://conventionalbranch.org)), which allows dots in any branch, AI-agent types like `claude/`, and any description after `release/`. We allow dots only in versions, ban agent types, and require `release/` to be a version. We also add one type the spec doesn't have, `refactor/`. The rule lives in `scripts/check-branch-name.sh`, which `scripts/check-branch-name_test.sh` tests.
 
 ## Commits — Conventional Commits
 
