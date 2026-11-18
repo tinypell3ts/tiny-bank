@@ -17,6 +17,13 @@
 
 watchNamespaces: []
 
+# Give every pod Strimzi runs (brokers, the topic operator) the Kubernetes
+# "restricted" security settings: non-root, no privilege escalation, all
+# capabilities dropped, the default seccomp profile, as our own pods have.
+extraEnvs:
+  - name: STRIMZI_POD_SECURITY_PROVIDER_CLASS
+    value: restricted
+
 # The chart's defaults (384Mi, request 200m CPU) suit one small cluster.
 resources:
   requests:

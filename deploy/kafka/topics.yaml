@@ -1,0 +1,26 @@
+# Topics, as KafkaTopic objects: the topic operator creates and updates them.
+# A topic is declared here, in git, before anything writes to it
+# (auto.create.topics.enable is off in kafka.yaml).
+#
+# Each topic budgets its disk: a partition holds up to retention.bytes plus
+# one segment (segment.bytes), so a topic can use partitions × (retention.bytes
+# + segment.bytes). Keep the sum across topics well inside the 1 GiB volume.
+#
+# walkthrough is for trying Kafka out by hand (docs/phases): three partitions,
+# so keys, ordering and consumer groups can be seen. Services' own topics
+# arrive with the outbox.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: walkthrough
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: tiny-bank
+spec:
+  partitions: 3
+  replicas: 1
+  config:
+    retention.ms: 86400000 # a day: it's only for trying things out
+    # 3 partitions × (64 + 16) MiB = 240 MiB at most.
+    retention.bytes: 67108864 # 64 MiB per partition
+    segment.bytes: 16777216 # 16 MiB

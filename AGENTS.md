@@ -99,6 +99,7 @@ Current:
 │   ├── charts/service/  # ONE generic Helm chart used by every service
 │   ├── cnpg/            # CloudNativePG operator values (Postgres for services)
 │   ├── jaeger/          # Jaeger values (traces, in memory) for the local cluster
+│   ├── kafka/           # the Kafka cluster (KRaft, one node) and its topics, as Strimzi objects
 │   ├── strimzi/         # Strimzi operator values (runs Kafka) for the local cluster
 │   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
@@ -131,7 +132,7 @@ make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
 make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
 make undeploy                 # helm-uninstall SERVICE (deletes its database and data too)
-make chart-check              # helm lint + kubeconform (incl. CRD schemas) for every deploy/values/*.yaml and chart ci/*.yaml
+make chart-check              # helm lint + kubeconform (incl. CRD schemas) for every deploy/values/*.yaml and chart ci/*.yaml, and deploy/kafka/
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)
 make monitoring-down          # remove the monitoring stack
 make cnpg                     # install or upgrade the CloudNativePG operator in "cnpg-system" (make dev does this)
@@ -140,6 +141,8 @@ make jaeger                   # install or upgrade Jaeger (traces) in namespace 
 make jaeger-down              # remove Jaeger and the traces it holds
 make strimzi                  # install or upgrade the Strimzi operator (runs Kafka) in namespace "kafka" (make dev does this)
 make strimzi-down             # remove the operator (CRDs stay; delete Kafka clusters first)
+make kafka                    # create or update the Kafka cluster and topics in deploy/kafka/ (make dev does this)
+make kafka-down               # delete the Kafka cluster, INCLUDING every message in it
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
@@ -155,7 +158,7 @@ Cluster commands use the kubectl context `kind-tiny-bank`. Always pass `--contex
 
 To look inside a service's database, run `kubectl --context kind-tiny-bank exec -it <name>-db-1 -c postgres -- psql app` (for the account service, `account-db-1`; for the ledger, `ledger-db-1`). Its tables are the service's migrations, in `services/<name>/migrations/`. Only read, unless the human asks you to change data.
 
-**When debugging, look before you change anything, and never destroy data to fix a problem.** `make dev-down`, `make undeploy`, `make cluster-down` and deleting a database `Cluster` or its PVC all delete every account in it. Ask the human first, even if starting over looks like the quickest fix.
+**When debugging, look before you change anything, and never destroy data to fix a problem.** `make dev-down`, `make undeploy`, `make cluster-down` and deleting a database `Cluster` or its PVC all delete every account in it, and `make kafka-down` deletes every message in Kafka. Ask the human first, even if starting over looks like the quickest fix.
 
 Run `make check` before handing work back. CI (`.github/workflows/ci.yml`) runs the same targets on every PR, plus a `branch-name` job.
 

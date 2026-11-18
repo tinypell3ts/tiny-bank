@@ -115,6 +115,17 @@ local_resource(
     labels=['kafka'],
 )
 
+# The Kafka cluster and its topics: Strimzi objects in deploy/kafka/, applied
+# with kubectl once the operator is up. Edit a topic and save to apply it.
+# `tilt down` leaves it running; `make kafka-down` deletes it and its messages.
+local_resource(
+    'kafka',
+    cmd='make kafka',
+    deps=['deploy/kafka'],
+    resource_deps=['strimzi'],
+    labels=['kafka'],
+)
+
 def forward(name, service, port, target, namespace='monitoring', dep='monitoring', label='monitoring'):
     """Forward localhost:<port> (localhost only) to a service in namespace, once dep is up."""
     local_resource(

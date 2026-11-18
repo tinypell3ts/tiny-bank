@@ -1,0 +1,79 @@
+# The local Kafka cluster, as Strimzi objects: Strimzi (make strimzi) reads
+# them and runs the brokers. Applied by `make kafka` (and by `make dev`).
+#
+# One node that is both broker and controller (KRaft: Kafka keeps its own
+# metadata, no ZooKeeper), with a small persistent volume, so messages survive
+# a pod restart. Enough for one laptop; a shared cluster needs three nodes.
+#
+# Internal only: one plaintext listener on 9092, reached inside the cluster at
+# tiny-bank-kafka-bootstrap.kafka:9092. No external listener, no NodePort,
+# no LoadBalancer. No auth or TLS yet (a known gap in docs/security.md).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: tiny-bank
+spec:
+  replicas: 1
+  roles: [controller, broker]
+  storage:
+    type: persistent-claim
+    size: 1Gi
+    deleteClaim: true # the volume goes with the cluster: local data only
+  resources:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      memory: 1Gi
+  jvmOptions:
+    # Half the container for the heap; Kafka uses the rest for the OS page
+    # cache, which is where it serves recent messages from.
+    "-Xms": 512m
+    "-Xmx": 512m
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: tiny-bank
+  namespace: kafka
+spec:
+  kafka:
+    version: 4.3.2
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      # One broker, so every topic and Kafka's own internal topics have one
+      # copy. A shared cluster would use 3 and min.insync.replicas 2.
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      # Topics are created as KafkaTopic objects, in git, never by a client
+      # writing to a topic name it made up.
+      auto.create.topics.enable: false
+      # Disk: the volume is 1 GiB. Kafka writes each partition into segment
+      # files and only ever deletes whole segments, so a partition can hold
+      # up to its retention.bytes plus one segment. The defaults (1 GiB
+      # segments, no size limit) could fill the volume from one partition,
+      # whatever retention.ms says. So segments are 32 MiB, and a topic that
+      # doesn't set its own size limit keeps at most 128 MiB per partition.
+      # Each topic in topics.yaml budgets its own; together they must leave
+      # room for Kafka's internal __consumer_offsets topic.
+      log.segment.bytes: 33554432 # 32 MiB
+      log.retention.bytes: 134217728 # 128 MiB per partition
+  entityOperator:
+    # The topic operator turns KafkaTopic objects into topics.
+    topicOperator:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 256Mi
