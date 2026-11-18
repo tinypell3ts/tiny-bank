@@ -86,7 +86,7 @@ func (b bank) open(t *testing.T) string {
 // ledger's balances agree.
 func TestTransactionAPIEndToEnd(t *testing.T) {
 	b := startBank(t)
-	if !strings.Contains(b.logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql","00003_lease_transfers.sql"]`) {
+	if !strings.Contains(b.logs.String(), `"applied":["00001_create_transfers.sql","00002_index_due_transfers.sql","00003_lease_transfers.sql","00004_record_trace_and_request_ids.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", b.logs)
 	}
 	alice, bob := b.open(t), b.open(t)

@@ -13,6 +13,8 @@ import (
 	"uuid"
 
 	"github.com/monzo/typhon"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
@@ -44,6 +46,7 @@ func (f *fakeTransfers) Create(_ context.Context, req NewTransfer) (Transfer, bo
 	}
 	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
 	t := Transfer{ID: uuid.New(), IdempotencyKey: req.IdempotencyKey, Kind: req.Kind, From: req.From, To: req.To,
+		TraceID: req.TraceID, RequestID: req.RequestID,
 		Amount: req.Amount, State: StatePending, CreatedAt: now, UpdatedAt: now}
 	if f.finish != nil {
 		t = f.finish(t)
@@ -214,5 +217,31 @@ func TestGetTransfer(t *testing.T) {
 		if rec := serve(t, transfers, http.MethodGet, path, ""); rec.Code != http.StatusNotFound || errorCode(t, rec) != "not_found.transfer" {
 			t.Errorf("GET %s = %d %s, want 404 not_found.transfer", path, rec.Code, rec.Body)
 		}
+	}
+}
+
+// TestATransferIsSavedWithItsRequestsIDs: the handler takes the trace and
+// request IDs from the request (kit.Handler put them on its context) and
+// hands them to the store.
+func TestATransferIsSavedWithItsRequestsIDs(t *testing.T) {
+	prev := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{}) // as obs.StartTracing does
+	t.Cleanup(func() { otel.SetTextMapPropagator(prev) })
+
+	transfers := newFake(nil)
+	router := typhon.Router{}
+	RegisterRoutes(&router, transfers)
+	var ready atomic.Bool
+	ready.Store(true)
+	h := kit.Handler(slog.New(slog.DiscardHandler), obs.NewRegistry(), &router, &ready, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/transfers", strings.NewReader(transferJSON))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(kit.RequestIDHeader, "req-42")
+	req.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	saved := transfers.byKey["t1"]
+	if saved.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || saved.RequestID != "req-42" {
+		t.Errorf("saved trace %q, request %q; want the request's", saved.TraceID, saved.RequestID)
 	}
 }

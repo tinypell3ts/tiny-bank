@@ -27,7 +27,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 // columns is selected by every query, in the order scanTransfer reads them.
 const columns = `id, idempotency_key, kind, from_account, to_account, currency, amount, state,
-	journal_id, failure_reason, attempts, next_attempt_at, created_at, updated_at, lease`
+	journal_id, failure_reason, attempts, next_attempt_at, created_at, updated_at, lease, trace_id, request_id`
 
 // Create saves req as a new pending transfer. created is false when a
 // transfer with req's idempotency key already exists and asks for the same
@@ -47,10 +47,10 @@ func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, er
 		from = &req.From
 	}
 	t, err := scanTransfer(s.pool.QueryRow(ctx,
-		`INSERT INTO transfers (idempotency_key, kind, from_account, to_account, currency, amount)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO transfers (idempotency_key, kind, from_account, to_account, currency, amount, trace_id, request_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''))
 		 ON CONFLICT (idempotency_key) DO NOTHING RETURNING `+columns,
-		req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount()))
+		req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount(), req.TraceID, req.RequestID))
 	if err == nil {
 		return t, true, nil
 	}
@@ -243,9 +243,11 @@ func scanTransfer(row pgx.Row) (Transfer, error) {
 		journalID *uuid.UUID
 		reason    *string
 		lease     *uuid.UUID
+		traceID   *string
+		requestID *string
 	)
 	if err := row.Scan(&t.ID, &t.IdempotencyKey, &kind, &from, &t.To, &currency, &amount, &state,
-		&journalID, &reason, &t.Attempts, &t.NextAttemptAt, &t.CreatedAt, &t.UpdatedAt, &lease); err != nil {
+		&journalID, &reason, &t.Attempts, &t.NextAttemptAt, &t.CreatedAt, &t.UpdatedAt, &lease, &traceID, &requestID); err != nil {
 		return Transfer{}, err
 	}
 	c, err := money.ParseCurrency(currency)
@@ -264,6 +266,12 @@ func scanTransfer(row pgx.Row) (Transfer, error) {
 	}
 	if lease != nil {
 		t.Lease = *lease
+	}
+	if traceID != nil {
+		t.TraceID = *traceID
+	}
+	if requestID != nil {
+		t.RequestID = *requestID
 	}
 	return t, nil
 }

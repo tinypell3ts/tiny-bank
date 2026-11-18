@@ -344,3 +344,27 @@ func TestOnlyTheLeaseHolderCanAttemptOrRefuse(t *testing.T) {
 		t.Errorf("Fail with the current lease = %+v, %v; want it failed", got, err)
 	}
 }
+
+// TestATransferKeepsTheIDsOfTheRequestThatCreatedIt: they lead from the
+// transfer to its trace and logs, so they're saved with it, and a retry from
+// another request doesn't replace them.
+func TestATransferKeepsTheIDsOfTheRequestThatCreatedIt(t *testing.T) {
+	s := newTestStore(t)
+	req := transferReq("t1", alice, bob, 300)
+	req.TraceID, req.RequestID = "4bf92f3577b34da6a3ce929d0e0e4736", "req-1"
+	first := mustCreate(t, s, req)
+	if got, _ := s.Get(t.Context(), first.ID); got.TraceID != req.TraceID || got.RequestID != "req-1" {
+		t.Fatalf("saved trace %q, request %q; want the creating request's", got.TraceID, got.RequestID)
+	}
+
+	retry := transferReq("t1", alice, bob, 300)
+	retry.TraceID, retry.RequestID = "0af7651916cd43dd8448eb211c80319c", "req-2"
+	again, created, err := s.Create(t.Context(), retry)
+	if err != nil || created || again.TraceID != req.TraceID || again.RequestID != "req-1" {
+		t.Errorf("retry = trace %q, request %q, %v, created %v; want the first request's IDs kept", again.TraceID, again.RequestID, err, created)
+	}
+
+	if none := mustCreate(t, s, transferReq("t2", alice, bob, 300)); none.TraceID != "" || none.RequestID != "" {
+		t.Errorf("a transfer from a request with no IDs = %q, %q; want both empty", none.TraceID, none.RequestID)
+	}
+}

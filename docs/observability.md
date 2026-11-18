@@ -82,6 +82,23 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 
   `kit.Handler` gives every request a server span ([tracing.go](../pkg/kit/tracing.go)), continuing the caller's trace or starting one. It's named and labelled like the metrics: `POST /transfers`, with `http.request.method`, `http.route`, `http.response.status_code`, and `error.type` (the terror code) on an error. Only a 5xx marks a span failed. Probes get no span. The access log line carries `trace_id` next to `request_id`, so a log line leads to its trace in Jaeger, and back. `kit.Get` and `kit.Post` give each call a client span, named by method and the other service (`POST ledger`), never the path, and send the trace on as `traceparent`, so one request is one trace across every service it touches: a deposit shows as `POST /deposits` → `POST ledger` → `POST /journals` → `GET account` → `GET /accounts/:id`. A call's span records the status only of a response that really came back, not of a connection that failed. Database queries don't have spans yet.
 
+### Finding a customer's transfer
+
+A customer doesn't know a trace ID: they say "my £50 payment failed this morning". Start from the transfer. Each one keeps the trace ID and request ID of the request that created it, saved before the ledger is called, so even a transfer whose every ledger call timed out leads to its trace:
+
+```bash
+kubectl --context kind-tiny-bank exec -it transaction-db-1 -c postgres -- psql app -c \
+  "SELECT id, state, failure_reason, amount, created_at, trace_id, request_id FROM transfers
+   WHERE from_account = '<their account ID>' AND created_at > now() - interval '1 day' ORDER BY created_at DESC"
+```
+
+`state` and `failure_reason` usually answer the customer already (`precondition_failed.insufficient_funds`). When they don't (a transfer still pending, or a 500):
+
+- paste `trace_id` into Jaeger's *Lookup by Trace ID* for the whole journey, and which hop failed;
+- `kubectl --context kind-tiny-bank logs deploy/transaction | grep <request_id>` for the full error text, which spans leave out.
+
+The saved trace is the creating request's. Work the background finisher does on the transfer later is a separate trace. Transfers saved before the IDs were kept have both empty. With tracing off, a new transfer still gets its `request_id` (`kit.Handler` gives every request one), so the log lookup still works; only `trace_id` is empty.
+
 ### On the cluster
 
 `make dev` (or `make monitoring` on its own) installs [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) into the `monitoring` namespace, with settings in [deploy/monitoring/values.yaml](../deploy/monitoring/values.yaml):

@@ -88,7 +88,10 @@ func amountOf(currency string, minor int64) (money.Money, error) {
 	return money.New(minor, c), nil
 }
 
+// create saves nt, with the IDs of the request asking for it (see
+// NewTransfer), and answers with the transfer.
 func (h handler) create(req typhon.Request, nt NewTransfer) typhon.Response {
+	nt.TraceID, nt.RequestID = kit.TraceIDFrom(req.Context), kit.RequestIDFrom(req.Context)
 	t, created, err := h.transfers.Create(req.Context, nt)
 	if err != nil {
 		return typhon.Response{Error: err}

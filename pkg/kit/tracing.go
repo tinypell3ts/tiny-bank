@@ -71,9 +71,12 @@ func tracingFilter(router *typhon.Router) typhon.Filter {
 	}
 }
 
-// traceIDFrom is the ID of the trace ctx's span belongs to, for log lines,
-// or "" when there's no trace (tracing off, or a probe).
-func traceIDFrom(ctx context.Context) string {
+// TraceIDFrom is the ID of the trace ctx's span belongs to, as 32 hex
+// characters, or "" when there's no trace (tracing off, or a probe). The
+// access log carries it, and a service may save it with a record (the
+// transaction service does, on each transfer), so the record leads to its
+// trace in Jaeger.
+func TraceIDFrom(ctx context.Context) string {
 	if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
 		return sc.TraceID().String()
 	}
