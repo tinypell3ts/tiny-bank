@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
 )
@@ -128,6 +129,75 @@ func TestProduceFailsWhenKafkaWontStoreIt(t *testing.T) {
 	spans := exporter.GetSpans()
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error {
 		t.Errorf("spans = %v, want one failed send span", spans)
+	}
+}
+
+// TestProduceAllAnswersForEachMessage: a message Kafka won't take fails on
+// its own; the others are stored.
+func TestProduceAllAnswersForEachMessage(t *testing.T) {
+	brokers := newKafka(t, "transfers", 1)
+	p, err := NewProducer(brokers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	errs := p.ProduceAll(ctx, []Outgoing{
+		{Topic: "transfers", Value: []byte("one")},
+		{Topic: "no-such-topic", Value: []byte("stuck")},
+		{Topic: "transfers", Value: []byte("three")},
+	})
+	if errs[0] != nil || errs[1] == nil || !strings.Contains(errs[1].Error(), "no-such-topic") || errs[2] != nil {
+		t.Errorf("ProduceAll = %v; want only the second to fail, about no-such-topic", errs)
+	}
+	if got := readAll(t, brokers, "transfers", 2); string(got[0].Value) != "one" || string(got[1].Value) != "three" {
+		t.Errorf("stored %s, %s; want one, three", got[0].Value, got[1].Value)
+	}
+}
+
+// TestProduceAllKeepsEachMessagesOwnTrace: messages from two requests, sent
+// together, each continue their own request's trace.
+func TestProduceAllKeepsEachMessagesOwnTrace(t *testing.T) {
+	exporter := kittest.RecordSpans(t)
+	brokers := newKafka(t, "transfers", 1)
+	p, err := NewProducer(brokers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	alice, aliceRequest := otel.Tracer("test").Start(t.Context(), "POST /transfers")
+	bob, bobRequest := otel.Tracer("test").Start(t.Context(), "POST /deposits")
+	for i, err := range p.ProduceAll(t.Context(), []Outgoing{
+		{Topic: "transfers", Value: []byte("alice"), Trace: alice},
+		{Topic: "transfers", Value: []byte("bob"), Trace: bob},
+	}) {
+		if err != nil {
+			t.Fatalf("message %d: %v", i, err)
+		}
+	}
+	aliceRequest.End()
+	bobRequest.End()
+
+	requestOf := map[string]trace.SpanContext{"alice": aliceRequest.SpanContext(), "bob": bobRequest.SpanContext()}
+	sendSpans := map[trace.SpanID]tracetest.SpanStub{}
+	for _, s := range exporter.GetSpans() {
+		if s.Name == "send transfers" {
+			sendSpans[s.SpanContext.SpanID()] = s
+		}
+	}
+	for _, record := range readAll(t, brokers, "transfers", 2) {
+		request := requestOf[string(record.Value)]
+		header := headerCarrier{record}.Get("traceparent")
+		var send tracetest.SpanStub
+		for id, s := range sendSpans {
+			if strings.Contains(header, id.String()) {
+				send = s
+			}
+		}
+		if send.Parent.SpanID() != request.SpanID() || send.SpanContext.TraceID() != request.TraceID() {
+			t.Errorf("message %s: its send span isn't under its own request (traceparent %s)", record.Value, header)
+		}
 	}
 }
 

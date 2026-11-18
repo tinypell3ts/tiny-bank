@@ -86,18 +86,53 @@ func NewProducer(brokers []string) (*Producer, error) {
 // it's on its way, Kafka may store it anyway. A caller that sends it again
 // may send it twice, which consumers must cope with in any case.
 func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte) error {
-	ctx, span := tracer.Start(ctx, "send "+topic, trace.WithSpanKind(trace.SpanKindProducer),
-		trace.WithAttributes(messagingAttrs(topic)...))
-	defer span.End()
+	return p.ProduceAll(ctx, []Outgoing{{Topic: topic, Key: key, Value: value, Trace: ctx}})[0]
+}
 
-	record := &kgo.Record{Topic: topic, Key: key, Value: value}
-	otel.GetTextMapPropagator().Inject(ctx, headerCarrier{record})
-	if err := p.client.ProduceSync(ctx, record).FirstErr(); err != nil {
-		obs.FailSpan(span, errorType(err))
-		return fmt.Errorf("send to %s: %w", topic, err)
+// Outgoing is a message for ProduceAll.
+type Outgoing struct {
+	Topic      string
+	Key, Value []byte
+	// Trace holds the span the message continues, which travels with it as
+	// a traceparent header. Nil means ProduceAll's ctx.
+	Trace context.Context
+}
+
+// ProduceAll sends messages together, rather than waiting for each before
+// sending the next, and returns once Kafka has answered for all of them, or
+// ctx ends. Each message is stored or not on its own: one failing doesn't
+// stop the others, even one after it with the same key. So a caller that
+// needs a key's messages in order sends one message per key per call.
+//
+// It returns an answer for each message: nil if Kafka stored it. An error
+// doesn't always mean it wasn't stored (see Produce), so a caller sends it
+// again, and consumers cope with seeing it twice, as they must anyway.
+func (p *Producer) ProduceAll(ctx context.Context, messages []Outgoing) []error {
+	errs := make([]error, len(messages))
+	var wg sync.WaitGroup
+	for i, m := range messages {
+		parent := m.Trace
+		if parent == nil {
+			parent = ctx
+		}
+		spanCtx, span := tracer.Start(parent, "send "+m.Topic, trace.WithSpanKind(trace.SpanKindProducer),
+			trace.WithAttributes(messagingAttrs(m.Topic)...))
+		record := &kgo.Record{Topic: m.Topic, Key: m.Key, Value: m.Value}
+		otel.GetTextMapPropagator().Inject(spanCtx, headerCarrier{record})
+		wg.Add(1)
+		p.client.Produce(ctx, record, func(r *kgo.Record, err error) {
+			defer wg.Done()
+			defer span.End()
+			if err != nil {
+				errs[i] = fmt.Errorf("send to %s: %w", r.Topic, err)
+				obs.FailSpan(span, errorType(err))
+				return
+			}
+			span.SetAttributes(attribute.Int("messaging.destination.partition.id", int(r.Partition)))
+		})
 	}
-	span.SetAttributes(attribute.Int("messaging.destination.partition.id", int(record.Partition)))
-	return nil
+	wg.Wait()
+	return errs
 }
 
 // Close waits for messages still being sent, then disconnects.
