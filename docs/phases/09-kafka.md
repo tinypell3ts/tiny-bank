@@ -87,7 +87,7 @@ Send one more message, and describe the group again: its partition now has a lag
 printf 'dave:deposited 7\n' | kubectl --context kind-tiny-bank -n kafka exec -i tiny-bank-dual-role-0 -- bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic walkthrough --reader-property parse.key=true --reader-property key.separator=:
 ```
 
-Read as the group again, this time without `--from-beginning`. It carries on from its committed offset, so it prints only Dave's message. A new group name would read everything again.
+Read as the group again, this time without `--from-beginning`. It carries on from its committed offset, so it prints only Dave's message. To read everything again, use a new group name and `--from-beginning`: a group with nothing committed starts where the tool tells it to, and this tool starts at the end unless told otherwise, skipping what's already there. `pkg/kafka`'s `Consume` starts a new group at the beginning, so a new consumer misses nothing.
 
 ```bash
 kubectl --context kind-tiny-bank -n kafka exec tiny-bank-dual-role-0 -- bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic walkthrough --group walkthrough-readers --timeout-ms 8000 --formatter-property print.key=true --formatter-property print.partition=true
