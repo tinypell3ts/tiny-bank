@@ -84,7 +84,7 @@ kubectl --context kind-tiny-bank scale deploy/ledger --replicas=1
 
 ## Concepts (8b)
 
-- **Metrics say that, traces say where, logs say why.** The error rate rose at 14:02 (Grafana). A failing trace from 14:02 shows which hop and which query (Jaeger). That request's log line has the full error (`kubectl logs | grep <trace_id>`). The `trace_id` in every log line joins the last two.
+- **Metrics say that, traces say where, logs say why.** The error rate rose at 14:02 (Grafana). A failing trace from 14:02 shows which hop and which query (Jaeger). That request's logs have the full error, in two steps: the access log line is the one that carries the trace ID (`kubectl logs | grep <trace_id>`), and it also has the request's `request_id`, which every line about that request carries, including the one with the full error (`kubectl logs | grep <request_id>`). The access line is what joins traces to logs.
 - **A trace is a tree of spans.** Each span is one piece of work, with a start, an end, a name and a parent. The trace ID travels between services in one header, `traceparent: 00-<trace id>-<parent span>-01`, and inside a service in Go's `context.Context`, which is why every call passes `req.Context`.
 - **Name spans like metric labels.** A span name or attribute from a raw path or a value would make unlimited names and could carry personal data. Route patterns, service names, table names and fixed codes are a small set, and never hold what a caller typed. A query's span holds its SQL, which is always fixed text with `$1`, never its values.
 - **Trace work, not polling.** Probes, the finisher's once-a-second check for due transfers, and migrations would bury real traffic, so only requests, and the finisher's actual attempts, make spans.
