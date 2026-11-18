@@ -16,7 +16,7 @@ Infrastructure comes first, so every service is born on Kubernetes.
 | 6 | Protobuf contracts (`proto/`, `buf` lint, breaking and drift checks), served as JSON | [06-protobuf-contracts](06-protobuf-contracts.md) |
 | 7 | Ledger service (double-entry journals, row locks, idempotency keys, an append-only audit trail), and the first service-to-service call (`kit.Get`, binary protobuf) | [07-ledger](07-ledger.md) |
 | 8 | Transaction service (transfers as a state machine, retries with the same key, a background finisher) + tracing (OpenTelemetry and Jaeger: one trace per request across services, queries and retries) | [08-transaction-service](08-transaction-service.md) |
-| 9 | Kafka via Strimzi | |
+| 9 | Kafka via Strimzi (KRaft, topics declared in git) and `pkg/kafka` on franz-go: keyed messages in order, consumer groups, at-least-once delivery, the trace carried through | [09-kafka](09-kafka.md) |
 | 10 | Transactional outbox | |
 | 10.5 | Hot accounts: make one very busy account (the funding account, a big merchant) fast, measured with the load tool: credits without a check, a single writer per account through Kafka, sharded accounts | |
 | 11 | Notification service | |
