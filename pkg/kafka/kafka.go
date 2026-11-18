@@ -119,6 +119,10 @@ func errorType(err error) string {
 // Handler handles one message. Returning an error means "not handled": the
 // message is offered again (after a pause) and its offset isn't committed,
 // so nothing after it on its partition is handled until it succeeds.
+//
+// A handler must stop promptly once ctx ends, as that's how it learns its
+// partition is moving to another member, and it must cope with seeing a
+// message twice.
 type Handler func(ctx context.Context, m Message) error
 
 const (
@@ -139,9 +143,14 @@ const (
 // message is handled at least once. A message whose handler fails is offered
 // again, every retryPause, until it succeeds or its partition moves away:
 // that partition waits, keeping order, while the others carry on. Before a
-// partition moves to another member, its worker stops and commits what it
-// handled, so two members never handle one partition at once. Handler
-// errors are logged to logger.
+// partition is handed to another member, its worker stops and commits what
+// it handled, so in an orderly handoff (a rebalance or a deploy) two members
+// don't handle one partition at once, as long as handlers stop promptly when
+// their ctx ends. It can't prevent that when a member loses contact with
+// Kafka: the group gives its partitions away when its session expires, while
+// a slow handler may still be running. Handlers that write must be safe
+// even then, the way the ledger's idempotency keys are. Handler errors are
+// logged to logger.
 func Consume(ctx context.Context, brokers []string, group string, topics []string, handle Handler, logger *slog.Logger) error {
 	c := &consumer{ctx: ctx, handle: handle, logger: logger, workers: map[topicPartition]*worker{}}
 	client, err := kgo.NewClient(
@@ -212,9 +221,11 @@ func (c *consumer) start(_ context.Context, client *kgo.Client, assigned map[str
 	}
 }
 
-// stop stops the workers of partitions moving away (or lost, or the client
-// closing) and waits for each to commit what it handled. The group doesn't
-// give a partition to its new member until this returns.
+// stop stops the workers of partitions moving away (or the client closing)
+// and waits for each to commit what it handled: in a rebalance, the group
+// doesn't give a partition to its new member until this returns. For lost
+// partitions it's too late for that (they may already have a new member),
+// but it still stops their workers.
 func (c *consumer) stop(_ context.Context, client *kgo.Client, partitions map[string][]int32) {
 	c.mu.Lock()
 	var stopping []*worker
