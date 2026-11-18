@@ -5,16 +5,23 @@
 //   - A message is sent only once Kafka has stored it (Producer.Produce
 //     waits), and the producer is idempotent, so a retry inside franz-go
 //     never writes a message twice.
+//   - A message is received at least once (Consume): its offset is committed
+//     only after the handler succeeds, so a crash or a failed handler means
+//     it's handled again, never skipped. Handlers must cope with seeing a
+//     message twice.
 //   - Messages with the same key go to the same partition, in order, so
 //     everything about one account (say) is handled in the order it was sent.
 //   - The trace travels in a traceparent header, so a request's trace
-//     continues through Kafka.
+//     continues through Kafka into whatever handles the message.
 package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
@@ -88,6 +95,85 @@ func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte)
 
 // Close waits for messages still being sent, then disconnects.
 func (p *Producer) Close() { p.client.Close() }
+
+// Handler handles one message. Returning an error means "not handled": the
+// message is offered again (after a pause) and its offset isn't committed,
+// so nothing after it on its partition is handled until it succeeds.
+type Handler func(ctx context.Context, m Message) error
+
+// retryPause is how long Consume waits before offering a message whose
+// handler failed again.
+const retryPause = time.Second
+
+// Consume receives messages from topics as part of consumer group group,
+// and calls handle for each, until ctx ends. The group's members share the
+// topics' partitions between them, so running more pods spreads the work,
+// and when one stops, its partitions move to the others.
+//
+// Each message's offset is committed only once handle succeeds, so every
+// message is handled at least once. A message whose handler fails is offered
+// again, every retryPause, until it succeeds or ctx ends: its partition
+// waits, keeping order. Its handler's errors are logged to logger.
+func Consume(ctx context.Context, brokers []string, group string, topics []string, handle Handler, logger *slog.Logger) error {
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(brokers...),
+		kgo.ConsumerGroup(group),
+		kgo.ConsumeTopics(topics...),
+		kgo.DisableAutoCommit(), // commit after handling, below
+	)
+	if err != nil {
+		return fmt.Errorf("kafka consumer: %w", err)
+	}
+	defer client.Close() // leaves the group, so its partitions move at once
+
+	for {
+		fetches := client.PollFetches(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		for _, fe := range fetches.Errors() {
+			logger.ErrorContext(ctx, "kafka fetch", "topic", fe.Topic, "partition", fe.Partition, "error", fe.Err)
+		}
+		for record := range fetches.RecordsAll() {
+			if !handleUntilDone(ctx, record, handle, logger) {
+				return nil // ctx ended: leave it uncommitted, to be handled next time
+			}
+			if err := client.CommitRecords(ctx, record); err != nil && !errors.Is(err, context.Canceled) {
+				// Handled but not committed: it'll be handled again, which
+				// at-least-once allows.
+				logger.ErrorContext(ctx, "kafka commit", "topic", record.Topic, "partition", record.Partition, "error", err)
+			}
+		}
+	}
+}
+
+// handleUntilDone calls handle for record in a consumer span that continues
+// the producer's trace, until it succeeds (true) or ctx ends (false).
+func handleUntilDone(ctx context.Context, record *kgo.Record, handle Handler, logger *slog.Logger) bool {
+	parent := otel.GetTextMapPropagator().Extract(ctx, headerCarrier{record})
+	m := Message{Topic: record.Topic, Partition: record.Partition, Offset: record.Offset, Key: record.Key, Value: record.Value}
+	for {
+		spanCtx, span := tracer.Start(parent, "process "+record.Topic, trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(append(messagingAttrs(record.Topic),
+				attribute.Int("messaging.destination.partition.id", int(record.Partition)),
+				attribute.Int64("messaging.kafka.offset", record.Offset))...))
+		err := handle(spanCtx, m)
+		if err != nil {
+			obs.FailSpan(span, "_OTHER")
+			logger.ErrorContext(spanCtx, "handle kafka message, will retry", "topic", record.Topic,
+				"partition", record.Partition, "offset", record.Offset, "error", err)
+		}
+		span.End()
+		if err == nil {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(retryPause):
+		}
+	}
+}
 
 func messagingAttrs(topic string) []attribute.KeyValue {
 	return []attribute.KeyValue{
