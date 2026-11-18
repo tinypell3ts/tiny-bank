@@ -95,6 +95,7 @@ Current:
 │   └── dbtest/          # integration tests' Postgres (testcontainers): Database/Migrated (a fresh database on one server per package), StartPostgres (a server of its own)
 ├── pkg/funding/         # the ledger's funding accounts (one per currency, fixed IDs): where deposits come from
 ├── pkg/kafka/           # Kafka on franz-go: Producer (waits until stored, idempotent, keyed so one key keeps its order), Consume (a consumer group, at least once: commits after the handler succeeds, retries a failure holding its partition), the trace carried in a traceparent header; KAFKA_BROKERS
+├── pkg/outbox/          # transactional outbox: Add saves an event in the caller's transaction, with its trace, to be sent to Kafka once that commits
 ├── pkg/money/           # Money (int64 minor units + Currency): Add/Sub that never mix currencies or overflow; MaxAmount, the largest single movement
 ├── proto/               # protobuf contracts (buf), one versioned package per service API, plus generated Go
 ├── deploy/
