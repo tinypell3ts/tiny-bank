@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -75,4 +78,43 @@ func tracesURLFrom(endpoint string) (string, error) {
 		return "", fmt.Errorf("tracing: %s must be an http or https URL, like http://jaeger.jaeger:4318", TracingEndpoint)
 	}
 	return u.JoinPath("v1", "traces").String(), nil
+}
+
+// Tracer starts spans for one instrumentation scope (a package) from
+// OpenTelemetry's global tracer provider. It looks the provider's tracer up
+// only when the provider has changed since the last span (a test swapping
+// in a recorder, say), so a span costs one atomic load, not the provider's
+// locked lookup: it runs on hot paths, like every database query.
+type Tracer struct {
+	name   string
+	cached atomic.Pointer[cachedTracer]
+}
+
+type cachedTracer struct {
+	provider trace.TracerProvider
+	tracer   trace.Tracer
+}
+
+// NewTracer returns a Tracer for the scope called name, usually the
+// package's import path.
+func NewTracer(name string) *Tracer { return &Tracer{name: name} }
+
+// Start starts a span, as trace.Tracer.Start does, from the current global
+// provider.
+func (t *Tracer) Start(ctx context.Context, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
+	provider := otel.GetTracerProvider()
+	c := t.cached.Load()
+	if c == nil || c.provider != provider {
+		c = &cachedTracer{provider: provider, tracer: provider.Tracer(t.name)}
+		t.cached.Store(c)
+	}
+	return c.tracer.Start(ctx, spanName, opts...)
+}
+
+// FailSpan marks span failed, with errorType as its error.type: a fixed code
+// such as a terror's, a SQLSTATE, or "_OTHER" when nothing better is known.
+// Never a message, which may hold what a caller sent.
+func FailSpan(span trace.Span, errorType string) {
+	span.SetAttributes(attribute.String("error.type", errorType))
+	span.SetStatus(codes.Error, "")
 }
