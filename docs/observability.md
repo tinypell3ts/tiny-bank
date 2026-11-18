@@ -97,7 +97,7 @@ kubectl --context kind-tiny-bank exec -it transaction-db-1 -c postgres -- psql a
 - paste `trace_id` into Jaeger's *Lookup by Trace ID* for the whole journey, and which hop failed;
 - `kubectl --context kind-tiny-bank logs deploy/transaction | grep <request_id>` for the full error text, which spans leave out.
 
-The saved trace is the creating request's. Work the background finisher does on the transfer later is a separate trace. Transfers saved before the IDs were kept, or by a request with tracing off, have them empty.
+The saved trace is the creating request's. Work the background finisher does on the transfer later is a separate trace. Transfers saved before the IDs were kept have both empty. With tracing off, a new transfer still gets its `request_id` (`kit.Handler` gives every request one), so the log lookup still works; only `trace_id` is empty.
 
 ### On the cluster
 
