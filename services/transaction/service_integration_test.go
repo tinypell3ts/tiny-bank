@@ -16,6 +16,7 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
@@ -515,4 +516,43 @@ func TestAFinisherAttemptIsATraceOfItsOwn(t *testing.T) {
 	if len(underIt) == 0 {
 		t.Error("no database spans under the attempt: its StartAttempt and Complete should show")
 	}
+}
+
+// TestAFinisherAttemptThatFailsInTheDatabaseKeepsItsState: when the database
+// fails mid-attempt (here, it goes away while the ledger is posting, so the
+// answer can't be saved), the attempt has no transfer to return. Its span
+// still records the state the transfer is left in, pending, rather than "".
+func TestAFinisherAttemptThatFailsInTheDatabaseKeepsItsState(t *testing.T) {
+	exporter := kittest.RecordSpans(t)
+	var s *Service
+	dbGoesAway := ledgerFunc(func(context.Context, Transfer) (uuid.UUID, error) {
+		s.pool.Close() // the next query, Complete, fails
+		return uuid.New(), nil
+	})
+	s = NewService(newTestStore(t), dbGoesAway, prometheus.NewRegistry())
+	tr, _, err := s.Store.Create(t.Context(), transferReq("t1", alice, bob, 300))
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeDue(t, s.Store, tr.ID)
+	if _, err := s.FinishDue(t.Context(), discard); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, sp := range exporter.GetSpans() {
+		if sp.Name != "finish transfer" {
+			continue
+		}
+		state := ""
+		for _, kv := range sp.Attributes {
+			if kv.Key == "transfer.state" {
+				state = kv.Value.String()
+			}
+		}
+		if sp.Status.Code != codes.Error || state != "pending" {
+			t.Errorf("finish span = %v, transfer.state %q; want failed, and pending (what the database still holds), not empty", sp.Status, state)
+		}
+		return
+	}
+	t.Fatal("no finish transfer span")
 }
