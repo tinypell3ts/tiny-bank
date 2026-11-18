@@ -30,8 +30,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// accountColumns is selected by every accounts query, in the order
-// scanBalance reads them.
+// accountColumns is selected by every accounts query. scanBalance reads them
+// by name, so their order doesn't matter, but each must be a field of
+// balanceRow.
 const accountColumns = "id, kind, currency, balance"
 
 // errAlreadyPosted rolls back a post whose idempotency key is already taken.
@@ -262,7 +263,7 @@ func lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([]Balance, e
 	if err != nil {
 		return nil, fmt.Errorf("lock accounts: %w", err)
 	}
-	balances, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Balance, error) { return scanBalance(row) })
+	balances, err := pgx.CollectRows(rows, scanBalance)
 	if err != nil {
 		return nil, fmt.Errorf("lock accounts: %w", err)
 	}
@@ -361,7 +362,11 @@ func journal(ctx context.Context, q querier, id uuid.UUID) (Journal, error) {
 // Balance returns how much account id holds, or a terrors not_found if no
 // journal has touched it yet.
 func (s *Store) Balance(ctx context.Context, id uuid.UUID) (Balance, error) {
-	b, err := scanBalance(s.pool.QueryRow(ctx, `SELECT `+accountColumns+` FROM accounts WHERE id = $1`, id))
+	rows, err := s.pool.Query(ctx, `SELECT `+accountColumns+` FROM accounts WHERE id = $1`, id)
+	if err != nil {
+		return Balance{}, fmt.Errorf("get balance: %w", err)
+	}
+	b, err := pgx.CollectOneRow(rows, scanBalance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Balance{}, errAccountNotFound()
 	}
@@ -371,21 +376,24 @@ func (s *Store) Balance(ctx context.Context, id uuid.UUID) (Balance, error) {
 	return b, nil
 }
 
-func scanBalance(row pgx.Row) (Balance, error) {
-	var (
-		b        Balance
-		kind     string
-		currency string
-		amount   int64
-	)
-	if err := row.Scan(&b.AccountID, &kind, &currency, &amount); err != nil {
+// balanceRow is a row of accounts, read by column name
+// (pgx.RowToStructByName), so the order of accountColumns doesn't matter and
+// a missing or extra column is an error, never a silent mix-up.
+type balanceRow struct {
+	ID       uuid.UUID `db:"id"`
+	Kind     string    `db:"kind"`
+	Currency string    `db:"currency"`
+	Balance  int64     `db:"balance"`
+}
+
+func scanBalance(row pgx.CollectableRow) (Balance, error) {
+	r, err := pgx.RowToStructByName[balanceRow](row)
+	if err != nil {
 		return Balance{}, err
 	}
-	c, err := money.ParseCurrency(currency)
+	c, err := money.ParseCurrency(r.Currency)
 	if err != nil { // the tables and pkg/money have drifted apart, as in Journal
-		return Balance{}, fmt.Errorf("stored account %s: %w", b.AccountID, err)
+		return Balance{}, fmt.Errorf("stored account %s: %w", r.ID, err)
 	}
-	b.Kind = Kind(kind)
-	b.Amount = money.New(amount, c)
-	return b, nil
+	return Balance{AccountID: r.ID, Kind: Kind(r.Kind), Amount: money.New(r.Balance, c)}, nil
 }
