@@ -11,38 +11,28 @@
 // Delivery is at least once, so every event carries its own ID, and
 // consumers skip one they've already handled.
 //
-// The service owns its outbox table, created by one of its migrations:
-//
-//	CREATE TABLE outbox (
-//	    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-//	    topic       text NOT NULL,
-//	    key         bytea NOT NULL,
-//	    value       bytea NOT NULL,
-//	    traceparent text NOT NULL,
-//	    created_at  timestamptz NOT NULL DEFAULT now()
-//	);
+// The service owns its outbox table, created by one of its migrations: a copy
+// of testdata/migrations/00001_create_outbox.sql, the one definition of it.
+// Columns are read by name, so a copy that has drifted fails loudly on the
+// first read rather than mixing columns up.
 package outbox
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/proto"
 )
 
-// Tx is what Add writes with: the caller's pgx.Tx.
-type Tx interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-}
-
 // Add saves event to be sent to topic, keyed by key, as binary protobuf. Call
 // it with the transaction that saves the change the event is about, so the
-// event is sent only if that commits. The trace in ctx is saved with it, so
-// the trace carries on to whatever handles the event.
-func Add(ctx context.Context, tx Tx, topic string, key []byte, event proto.Message) error {
+// event is sent only if that commits. The trace in ctx (traceparent and
+// tracestate) is saved with it, so the trace carries on to whatever handles
+// the event.
+func Add(ctx context.Context, tx pgx.Tx, topic string, key []byte, event proto.Message) error {
 	value, err := proto.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("outbox: marshal event for %s: %w", topic, err)
@@ -50,8 +40,8 @@ func Add(ctx context.Context, tx Tx, topic string, key []byte, event proto.Messa
 	trace := propagation.MapCarrier{}
 	otel.GetTextMapPropagator().Inject(ctx, trace)
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO outbox (topic, key, value, traceparent) VALUES ($1, $2, $3, $4)`,
-		topic, key, value, trace.Get("traceparent")); err != nil {
+		`INSERT INTO outbox (topic, key, value, traceparent, tracestate) VALUES ($1, $2, $3, $4, $5)`,
+		topic, key, value, trace.Get("traceparent"), trace.Get("tracestate")); err != nil {
 		return fmt.Errorf("outbox: add event for %s: %w", topic, err)
 	}
 	return nil
