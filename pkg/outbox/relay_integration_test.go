@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -80,8 +81,11 @@ func TestARelaySendsEventsInOrderAndDeletesThem(t *testing.T) {
 	add(t, ctx, pool, "events", "one", "two", "three")
 	request.End()
 
-	if sent, err := relay.SendBatch(t.Context()); sent != 3 || err != nil {
-		t.Fatalf("SendBatch = %d, %v; want 3, nil", sent, err)
+	// They share a key, so they go one per batch, each after the one before.
+	for range 3 {
+		if sent, err := relay.SendBatch(t.Context()); sent != 1 || err != nil {
+			t.Fatalf("SendBatch = %d, %v; want 1, nil", sent, err)
+		}
 	}
 	values, records := read(t, brokers, "events", 3)
 	if strings.Join(values, ",") != "one,two,three" {
@@ -103,24 +107,34 @@ func TestARelaySendsEventsInOrderAndDeletesThem(t *testing.T) {
 	}
 }
 
-// TestAnEventKafkaWontTakeHoldsBackTheRest: nothing is sent ahead of it, and
-// it stays, counted in the backlog, until Kafka takes it.
-func TestAnEventKafkaWontTakeHoldsBackTheRest(t *testing.T) {
-	pool, _, relay := setup(t)
-	add(t, t.Context(), pool, "no-such-topic", "stuck")
-	add(t, t.Context(), pool, "events", "behind")
+// TestAnEventKafkaWontTakeHoldsBackOnlyItsKey: the events after it with
+// the same key wait, so they never overtake it; other keys' events go. It
+// stays, counted in the backlog, until Kafka takes it.
+func TestAnEventKafkaWontTakeHoldsBackOnlyItsKey(t *testing.T) {
+	pool, brokers, relay := setup(t)
+	tooBig := strings.Repeat("x", 2<<20) // over the producer's 1 MB limit
+	for _, e := range [][2]string{{"alice", tooBig}, {"alice", "after"}, {"bob", "other"}} {
+		if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+			return Add(t.Context(), tx, "events", []byte(e[0]), wrapperspb.String(e[1]))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// No deadline of our own: SendBatch must give up by itself, within
 	// sendTimeout, rather than hold its transaction open.
 	start := time.Now()
-	if sent, err := relay.SendBatch(t.Context()); sent != 0 || err == nil {
-		t.Fatalf("SendBatch = %d, %v; want 0 and an error", sent, err)
+	if sent, err := relay.SendBatch(t.Context()); sent != 1 || err == nil {
+		t.Fatalf("SendBatch = %d, %v; want 1 (bob's) and an error", sent, err)
 	}
 	if took := time.Since(start); took > sendTimeout+5*time.Second {
 		t.Errorf("SendBatch took %v, want it to give up after about %v", took, sendTimeout)
 	}
+	if got, _ := read(t, brokers, "events", 2); strings.Join(got, ",") != "other" {
+		t.Errorf("Kafka has %v, want only bob's event: alice's after must wait for her first", got)
+	}
 	if n := waiting(t, pool); n != 2 {
-		t.Errorf("%d events in the outbox, want both", n)
+		t.Errorf("%d events in the outbox, want alice's two", n)
 	}
 	if err := relay.measure(t.Context()); err != nil {
 		t.Fatal(err)

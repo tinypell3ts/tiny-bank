@@ -6,10 +6,13 @@
 // roll back, and the event announces something that didn't happen. So the
 // event is saved instead, in an outbox table, in the same transaction as the
 // change (Add). A Relay, running beside the service, sends what's in the
-// table to Kafka, in order, and deletes each event once Kafka has stored it.
-// Order is the order rows were inserted, which is commit order only for
-// transactions that don't overlap: never add events for one key from two
-// transactions at once.
+// table to Kafka, and deletes each event once Kafka has stored it.
+//
+// Events with the same topic and key reach Kafka in the order their rows
+// were inserted: one that Kafka won't take holds back the rest of its key,
+// and only its key. Insert order is commit order only for transactions that
+// don't overlap, so never add events for one key from two transactions at
+// once. Events with different keys have no order between them.
 //
 // Delivery is at least once: a relay that stops after sending but before
 // deleting sends that event again. So every event carries its own ID, and
@@ -103,7 +106,7 @@ func (r *Relay) Run(ctx context.Context) {
 		if err != nil && ctx.Err() == nil {
 			r.logger.ErrorContext(ctx, "outbox relay", "error", err)
 		}
-		if sent == batchSize {
+		if sent > 0 {
 			continue // there may be more waiting
 		}
 		select {
@@ -123,11 +126,12 @@ type row struct {
 	Tracestate  string `db:"tracestate"`
 }
 
-// SendBatch sends the oldest events waiting, together and in the order they
-// were added, and deletes those Kafka stored, all in one transaction holding
-// the relay lock, within sendTimeout. Only events before the first that
-// Kafka didn't take are deleted, so nothing is sent ahead of it for good.
-// It returns how many it sent: 0 if another pod holds the lock.
+// SendBatch sends the oldest waiting event of each key among the oldest
+// batchSize events, all together, and deletes those Kafka stored, in one
+// transaction holding the relay lock, within sendTimeout. A key's next event
+// waits for a later batch, once this one is stored, so a key's events never
+// overtake each other however Kafka answers. It returns how many it sent: 0
+// if another pod holds the lock.
 func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 	var sent []int64
 	var sendErr error
@@ -147,19 +151,28 @@ func (r *Relay) SendBatch(ctx context.Context) (int, error) {
 		if err != nil {
 			return fmt.Errorf("read outbox: %w", err)
 		}
-		outgoing := make([]kafka.Outgoing, len(waiting))
-		for i, e := range waiting {
+		var ids []int64
+		var outgoing []kafka.Outgoing
+		keys := map[string]bool{}
+		for _, e := range waiting {
+			key := e.Topic + "\x00" + string(e.Key)
+			if keys[key] {
+				continue // its key's earlier event goes first
+			}
+			keys[key] = true
 			trace := otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": e.Traceparent, "tracestate": e.Tracestate})
-			outgoing[i] = kafka.Outgoing{Topic: e.Topic, Key: e.Key, Value: e.Value, Trace: trace}
+			ids = append(ids, e.ID)
+			outgoing = append(outgoing, kafka.Outgoing{Topic: e.Topic, Key: e.Key, Value: e.Value, Trace: trace})
 		}
 		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-		stored, err := r.producer.ProduceAll(sendCtx, outgoing)
+		errs := r.producer.ProduceAll(sendCtx, outgoing)
 		cancel()
-		if err != nil {
-			sendErr = fmt.Errorf("send event %d: %w", waiting[stored].ID, err)
-		}
-		for _, e := range waiting[:stored] {
-			sent = append(sent, e.ID)
+		for i, err := range errs {
+			if err == nil {
+				sent = append(sent, ids[i])
+			} else if sendErr == nil {
+				sendErr = fmt.Errorf("send event %d: %w", ids[i], err)
+			}
 		}
 		if len(sent) == 0 {
 			return nil
@@ -190,12 +203,19 @@ func (r *Relay) measureEvery(ctx context.Context) {
 	}
 }
 
-// measure sets the backlog metrics: how many events are waiting, and how
-// long ago the oldest was added.
+// maxCounted is as far as measure counts the backlog, so measuring a huge
+// backlog costs no more than measuring this many.
+const maxCounted = 10_000
+
+// measure sets the backlog metrics: how many events are waiting (up to
+// maxCounted), and how long ago the oldest was added. Both read the primary
+// key's index, not the whole table.
 func (r *Relay) measure(ctx context.Context) error {
 	var count int
 	var oldest *time.Time
-	if err := r.pool.QueryRow(ctx, `SELECT count(*), min(created_at) FROM outbox`).Scan(&count, &oldest); err != nil {
+	if err := r.pool.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM (SELECT 1 FROM outbox LIMIT $1) w),
+		        (SELECT created_at FROM outbox ORDER BY id LIMIT 1)`, maxCounted).Scan(&count, &oldest); err != nil {
 		return err
 	}
 	r.metrics.waiting.Set(float64(count))
@@ -219,7 +239,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 	m := &metrics{
 		waiting: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "outbox_waiting_events",
-			Help: "Events saved in the outbox and not yet sent to Kafka.",
+			Help: "Events saved in the outbox and not yet sent to Kafka, counted up to 10000.",
 		}),
 		oldest: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "outbox_oldest_waiting_seconds",
