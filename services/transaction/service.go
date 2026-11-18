@@ -167,7 +167,11 @@ func (s *Service) finishOne(ctx context.Context, logger *slog.Logger, t Transfer
 	defer span.End()
 
 	finished, err := s.attempt(ctx, t, byFinisher, 1)
-	span.SetAttributes(attribute.String("transfer.state", string(finished.State)))
+	state := finished.State
+	if state == "" { // a database error: attempt has no transfer to return, so t as claimed is the last known
+		state = t.State
+	}
+	span.SetAttributes(attribute.String("transfer.state", string(state)))
 	if err != nil {
 		span.SetStatus(codes.Error, "")
 		logger.ErrorContext(ctx, "finish transfer", "transfer_id", t.ID, "trace_id", kit.TraceIDFrom(ctx), "error", err)
