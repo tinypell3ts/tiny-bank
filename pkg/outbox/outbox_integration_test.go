@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -59,13 +60,18 @@ func waiting(t *testing.T, pool *pgxpool.Pool) int {
 func TestAddSavesTheEventWithItsTrace(t *testing.T) {
 	pool := migrated(t)
 	kittest.RecordSpans(t)
+	state, err := trace.ParseTraceState("vendor=1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, request := otel.Tracer("test").Start(t.Context(), "POST /transfers")
+	ctx = trace.ContextWithSpanContext(ctx, request.SpanContext().WithTraceState(state))
 	add(t, ctx, pool, "events", "one")
 	request.End()
 
-	var topic, traceparent string
+	var topic, traceparent, tracestate string
 	var key, value []byte
-	if err := pool.QueryRow(t.Context(), `SELECT topic, key, value, traceparent FROM outbox`).Scan(&topic, &key, &value, &traceparent); err != nil {
+	if err := pool.QueryRow(t.Context(), `SELECT topic, key, value, traceparent, tracestate FROM outbox`).Scan(&topic, &key, &value, &traceparent, &tracestate); err != nil {
 		t.Fatal(err)
 	}
 	var event wrapperspb.StringValue
@@ -77,6 +83,9 @@ func TestAddSavesTheEventWithItsTrace(t *testing.T) {
 	}
 	if !strings.Contains(traceparent, request.SpanContext().TraceID().String()) {
 		t.Errorf("traceparent = %q, want the request's trace", traceparent)
+	}
+	if tracestate != "vendor=1" {
+		t.Errorf("tracestate = %q, want the request's, vendor=1", tracestate)
 	}
 }
 
