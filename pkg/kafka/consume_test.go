@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
@@ -225,14 +226,16 @@ func TestTheTraceTravelsThroughKafka(t *testing.T) {
 	p.Close()
 	request.End()
 
-	var got handled
 	var inHandler trace.SpanContext
-	consume(t, brokers, "trace", "transfers", func(ctx context.Context, m Message) error {
+	consume(t, brokers, "trace", "transfers", func(ctx context.Context, _ Message) error {
 		inHandler = trace.SpanContextFromContext(ctx)
-		got.add(m)
 		return nil
 	})
-	eventually(t, "the message handled", func() bool { return got.values() == "x" })
+	// The process span ends after the handler returns, so wait for the span,
+	// not the handler.
+	eventually(t, "the process span", func() bool {
+		return slices.ContainsFunc(exporter.GetSpans(), func(s tracetest.SpanStub) bool { return s.Name == "process transfers" })
+	})
 
 	spans := map[string]trace.SpanContext{}
 	var processParent trace.SpanID
