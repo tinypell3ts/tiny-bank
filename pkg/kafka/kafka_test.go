@@ -131,6 +131,30 @@ func TestProduceFailsWhenKafkaWontStoreIt(t *testing.T) {
 	}
 }
 
+// TestProduceAllSaysHowManyWereStoredInOrder: a message Kafka won't take
+// stops the count there, even if later ones were stored.
+func TestProduceAllSaysHowManyWereStoredInOrder(t *testing.T) {
+	brokers := newKafka(t, "transfers", 1)
+	p, err := NewProducer(brokers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	stored, err := p.ProduceAll(ctx, []Outgoing{
+		{Topic: "transfers", Value: []byte("one")},
+		{Topic: "no-such-topic", Value: []byte("stuck")},
+		{Topic: "transfers", Value: []byte("three")},
+	})
+	if stored != 1 || err == nil || !strings.Contains(err.Error(), "no-such-topic") {
+		t.Errorf("ProduceAll = %d, %v; want 1 and an error about no-such-topic", stored, err)
+	}
+	if got := readAll(t, brokers, "transfers", 2); string(got[0].Value) != "one" || string(got[1].Value) != "three" {
+		t.Errorf("stored %s, %s; want one, three", got[0].Value, got[1].Value)
+	}
+}
+
 func TestErrorType(t *testing.T) {
 	for err, want := range map[error]string{
 		fmt.Errorf("send: %w", kerr.NotEnoughReplicas): "NOT_ENOUGH_REPLICAS",
