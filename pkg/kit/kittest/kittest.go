@@ -202,17 +202,35 @@ const (
 	callerTraceparent = "00-" + callerTraceID + "-" + callerSpanID + "-01"
 )
 
-// checkTracing turns tracing on for the check, keeping spans in memory, and
-// puts the global tracer provider and propagator back afterwards.
-func checkTracing(h http.Handler) error {
+// RecordSpans turns tracing on for one test, keeping every finished span in
+// memory, and puts OpenTelemetry's global tracer provider and propagator
+// back when the test ends. Spans are recorded as they end, so a test can
+// read them straight after the request that made them. Tests using it
+// mustn't run in parallel, as the provider is global.
+func RecordSpans(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+	exporter, restore := recordSpans()
+	t.Cleanup(restore)
+	return exporter
+}
+
+// recordSpans swaps in an in-memory span recorder and returns it, with a
+// function that swaps the previous provider and propagator back.
+func recordSpans() (*tracetest.InMemoryExporter, func()) {
 	exporter := tracetest.NewInMemoryExporter()
 	prevProvider, prevPropagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)))
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	defer func() {
+	return exporter, func() {
 		otel.SetTracerProvider(prevProvider)
 		otel.SetTextMapPropagator(prevPropagator)
-	}()
+	}
+}
+
+// checkTracing records spans for the check, then puts tracing back as it was.
+func checkTracing(h http.Handler) error {
+	exporter, restore := recordSpans()
+	defer restore()
 
 	serve(h, http.MethodGet, "/healthz", nil)
 	if n := len(exporter.GetSpans()); n != 0 {

@@ -50,6 +50,9 @@ var transport = &http.Transport{
 // client, on transport's connection pool, with these filters, innermost
 // first:
 //
+//   - wireStatus notes the status of the response that actually came back
+//     over the network, for the call's span, before ErrorFilter can turn a
+//     transport error into a made-up 500
 //   - capBody limits every response body to maxResponseBytes+1, before
 //     anything reads it. ErrorFilter reads an error response's whole body
 //     (and makes it the error's message if it isn't a terror), so without
@@ -63,11 +66,33 @@ var transport = &http.Transport{
 //     TestGetEndsWithTheCallersContext fails without it.
 //   - forwardRequestID passes the current request's ID on, so one request's
 //     log lines can be followed across every service it touches
+//   - forwardTrace passes the current span on as a W3C traceparent, so the
+//     other service's span joins this request's trace
 var client = typhon.HttpService(transport).
+	Filter(wireStatus).
 	Filter(capBody).
 	Filter(typhon.ErrorFilter).
 	Filter(typhon.ErrorFilter).
-	Filter(forwardRequestID)
+	Filter(forwardRequestID).
+	Filter(forwardTrace)
+
+// wireStatusKey holds, in a call's context, where wireStatus writes the
+// status of the response that came back. It's a pointer back to call, not an
+// attribute set on the span, because endCallSpan needs to know whether any
+// response came back at all to label the error (a span's attributes can't be
+// read back).
+type wireStatusKey struct{}
+
+// wireStatus records the status of a response that came back over the
+// network. On a transport error (no connection, a timeout) nothing came
+// back, so it records nothing.
+func wireStatus(req typhon.Request, next typhon.Service) typhon.Response {
+	rsp := next(req)
+	if p, ok := req.Value(wireStatusKey{}).(*int); ok && rsp.Response != nil && rsp.Error == nil {
+		*p = rsp.StatusCode
+	}
+	return rsp
+}
 
 // capBody limits the response's body to maxResponseBytes+1 bytes. Get reads
 // one byte more than the cap, so it can tell a body that's too large from one
@@ -120,7 +145,14 @@ func Post(ctx context.Context, url string, body, m proto.Message) error {
 	return call(ctx, http.MethodPost, url, body, m)
 }
 
-func call(ctx context.Context, method, url string, body, m proto.Message) error {
+// call makes one call to another service, as Get and Post describe, inside
+// a client span (see startCallSpan) that ends with its status and any error.
+func call(ctx context.Context, method, url string, body, m proto.Message) (err error) {
+	ctx, span := startCallSpan(ctx, method, url)
+	status := 0 // set by wireStatus if a response comes back
+	ctx = context.WithValue(ctx, wireStatusKey{}, &status)
+	defer func() { endCallSpan(span, status, err) }()
+
 	// Share the caller's deadline: give up a little before it, and tell the
 	// other service how long it has, so it stops in time to answer too.
 	budget, ok := callBudget(ctx)
