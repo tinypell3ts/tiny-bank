@@ -11,6 +11,7 @@ valid=(
   bugfix/rounding
   fix/issue-12-rounding
   hotfix/ledger-lock
+  refactor/obs-tracer
   chore/bump-go
   release/v1.2.0
   release/1.2
@@ -27,6 +28,8 @@ invalid=(
   feature/foo.1           # dots only allowed in release versions
   fix/issue-12.3          # dots only allowed in release versions
   feature/                # empty description
+  refactor/               # empty description
+  refactoring/obs         # not a type
   feature/a/b             # nested path
   release/next            # release must be a version
   release/v1..2           # double dot

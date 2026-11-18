@@ -11,7 +11,9 @@ branch="${1:?usage: $0 <branch-name>}"
 # A description is lowercase words joined by single hyphens: issue-12-ledger-postings
 slug='[a-z0-9]+(-[a-z0-9]+)*'
 # Ordinary branches: no dots anywhere.
-work_pattern="^(feature|feat|bugfix|fix|hotfix|chore)/${slug}\$"
+# refactor/ isn't in the Conventional Branch spec: we add it so a branch that
+# only restructures code matches its refactor: commits (AGENTS.md).
+work_pattern="^(feature|feat|bugfix|fix|hotfix|refactor|chore)/${slug}\$"
 # Release branches: dots only as a version, e.g. release/v1.2.0
 release_pattern='^release/v?[0-9]+(\.[0-9]+)*$'
 
@@ -24,7 +26,7 @@ cat >&2 <<EOF
 invalid branch name: $branch
 
 Use Conventional Branch: <type>/<description>
-  types: feature, feat, bugfix, fix, hotfix, chore, release
+  types: feature, feat, bugfix, fix, hotfix, refactor, chore, release
   lowercase a-z, 0-9 and single hyphens
   release branches are a version: release/v1.2.0
   examples: feature/phase-0-foundations, fix/issue-12-rounding, release/v1.2.0
