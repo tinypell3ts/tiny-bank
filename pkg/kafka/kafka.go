@@ -86,8 +86,7 @@ func NewProducer(brokers []string) (*Producer, error) {
 // it's on its way, Kafka may store it anyway. A caller that sends it again
 // may send it twice, which consumers must cope with in any case.
 func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte) error {
-	_, err := p.ProduceAll(ctx, []Outgoing{{Topic: topic, Key: key, Value: value, Trace: ctx}})
-	return err
+	return p.ProduceAll(ctx, []Outgoing{{Topic: topic, Key: key, Value: value, Trace: ctx}})[0]
 }
 
 // Outgoing is a message for ProduceAll.
@@ -101,13 +100,14 @@ type Outgoing struct {
 
 // ProduceAll sends messages together, rather than waiting for each before
 // sending the next, and returns once Kafka has answered for all of them, or
-// ctx ends. Messages with the same key keep their order.
+// ctx ends. Each message is stored or not on its own: one failing doesn't
+// stop the others, even one after it with the same key. So a caller that
+// needs a key's messages in order sends one message per key per call.
 //
-// It returns how many, from the first, Kafka stored: on an error, the
-// message it's about and those after it may or may not have been stored, so
-// a caller sends them again, in order, and consumers cope with seeing one
-// twice, as they must anyway.
-func (p *Producer) ProduceAll(ctx context.Context, messages []Outgoing) (int, error) {
+// It returns an answer for each message: nil if Kafka stored it. An error
+// doesn't always mean it wasn't stored (see Produce), so a caller sends it
+// again, and consumers cope with seeing it twice, as they must anyway.
+func (p *Producer) ProduceAll(ctx context.Context, messages []Outgoing) []error {
 	errs := make([]error, len(messages))
 	var wg sync.WaitGroup
 	for i, m := range messages {
@@ -124,7 +124,7 @@ func (p *Producer) ProduceAll(ctx context.Context, messages []Outgoing) (int, er
 			defer wg.Done()
 			defer span.End()
 			if err != nil {
-				errs[i] = err
+				errs[i] = fmt.Errorf("send to %s: %w", r.Topic, err)
 				obs.FailSpan(span, errorType(err))
 				return
 			}
@@ -132,12 +132,7 @@ func (p *Producer) ProduceAll(ctx context.Context, messages []Outgoing) (int, er
 		})
 	}
 	wg.Wait()
-	for i, m := range messages {
-		if errs[i] != nil {
-			return i, fmt.Errorf("send to %s: %w", m.Topic, errs[i])
-		}
-	}
-	return len(messages), nil
+	return errs
 }
 
 // Close waits for messages still being sent, then disconnects.
