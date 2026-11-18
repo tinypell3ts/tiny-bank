@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // receiver is a stand-in OTLP/HTTP receiver that keeps what it's sent.
@@ -132,5 +135,38 @@ func TestTracingErrorsAreLoggedAsWarnings(t *testing.T) {
 	otel.Handle(errors.New("export failed"))
 	if got := logs.String(); !strings.Contains(got, `"level":"WARN"`) || !strings.Contains(got, "export failed") {
 		t.Errorf("logs = %s, want the error as a JSON warning", got)
+	}
+}
+
+// TestATracerFollowsTheGlobalProvider: a Tracer caches the provider's tracer
+// but picks up a new provider when one is set, as tests do.
+func TestATracerFollowsTheGlobalProvider(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	tracer := NewTracer("test")
+
+	first := tracetest.NewInMemoryExporter()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(first)))
+	_, span := tracer.Start(t.Context(), "one")
+	span.End()
+
+	second := tracetest.NewInMemoryExporter()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(second)))
+	_, span = tracer.Start(t.Context(), "two")
+	span.End()
+
+	if len(first.GetSpans()) != 1 || len(second.GetSpans()) != 1 || second.GetSpans()[0].Name != "two" {
+		t.Errorf("spans went to %d and %d recorders, want one each: the tracer must follow a new provider", len(first.GetSpans()), len(second.GetSpans()))
+	}
+}
+
+func TestFailSpan(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	_, span := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)).Tracer("test").Start(t.Context(), "x")
+	FailSpan(span, "not_found.thing")
+	span.End()
+	s := exporter.GetSpans()[0]
+	if s.Status.Code != codes.Error || len(s.Attributes) != 1 || s.Attributes[0].Value.AsString() != "not_found.thing" {
+		t.Errorf("span = %v %v, want failed with error.type not_found.thing", s.Status, s.Attributes)
 	}
 }

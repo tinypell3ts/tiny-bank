@@ -17,8 +17,9 @@ import (
 	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
-// tracerName is the instrumentation scope of the kit's spans.
-const tracerName = "github.com/tinypell3ts/tiny-bank/pkg/kit"
+// tracer starts the kit's spans, from whichever provider is set when each
+// one starts (a test may swap it after building a handler).
+var tracer = obs.NewTracer("github.com/tinypell3ts/tiny-bank/pkg/kit")
 
 // tracingFilter gives every request a server span, so one request can be
 // followed across services. It continues the trace the caller sent in the
@@ -42,9 +43,7 @@ func tracingFilter(router *typhon.Router) typhon.Filter {
 		}
 		method := obs.MethodLabel(req.Method)
 		ctx := otel.GetTextMapPropagator().Extract(req.Context, propagation.HeaderCarrier(req.Header))
-		// Looked up per request, not once, so the tracer always comes from
-		// the provider set now (a test may swap it after building a handler).
-		ctx, span := otel.Tracer(tracerName).Start(ctx, method, trace.WithSpanKind(trace.SpanKindServer))
+		ctx, span := tracer.Start(ctx, method, trace.WithSpanKind(trace.SpanKindServer))
 		defer span.End()
 		req.Context = ctx
 
@@ -122,7 +121,7 @@ func startCallSpan(ctx context.Context, method, target string) (context.Context,
 	}
 	method = obs.MethodLabel(method)
 	attrs = append(attrs, attribute.String("http.request.method", method), attribute.String("server.address", host))
-	return otel.Tracer(tracerName).Start(ctx, method+" "+host, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+	return tracer.Start(ctx, method+" "+host, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 }
 
 // endCallSpan ends a client span with the call's status, 0 if no response
@@ -145,8 +144,7 @@ func endCallSpan(span trace.Span, status int, err error) {
 		if status != 0 && errors.As(err, &terr) {
 			errorType = terr.Code
 		}
-		span.SetAttributes(attribute.String("error.type", errorType))
-		span.SetStatus(codes.Error, "")
+		obs.FailSpan(span, errorType)
 	}
 	span.End()
 }

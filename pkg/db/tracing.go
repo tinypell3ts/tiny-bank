@@ -8,14 +8,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/obs"
 )
 
-// tracerName is the instrumentation scope of the database's spans.
-const tracerName = "github.com/tinypell3ts/tiny-bank/pkg/db"
+// tracer starts the database's spans.
+var tracer = obs.NewTracer("github.com/tinypell3ts/tiny-bank/pkg/db")
 
 // queryTracer gives each query, and each batch, a span under the request it
 // runs for, so a trace shows where a request's time went in the database:
@@ -78,7 +78,7 @@ func startQuerySpan(ctx context.Context, name string, attr attribute.KeyValue) c
 	if !trace.SpanContextFromContext(ctx).IsValid() {
 		return ctx
 	}
-	ctx, span := otel.Tracer(tracerName).Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient),
+	ctx, span := tracer.Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("db.system.name", "postgresql"), attr))
 	return context.WithValue(ctx, spanKey{}, span)
 }
@@ -92,8 +92,7 @@ func endQuerySpan(ctx context.Context, err error) {
 		return
 	}
 	if err != nil {
-		span.SetAttributes(attribute.String("error.type", errorTypeOf(err)))
-		span.SetStatus(codes.Error, "")
+		obs.FailSpan(span, errorTypeOf(err))
 	}
 	span.End()
 }
