@@ -126,6 +126,17 @@ local_resource(
     labels=['kafka'],
 )
 
+# Kafka UI: browse topics, messages (decoded from proto/) and consumer groups,
+# once Kafka is up. Rerun on a change to its values or to the contracts it
+# decodes with.
+local_resource(
+    'kafka-ui',
+    cmd='make kafka-ui',
+    deps=['deploy/kafka-ui/values.yaml', 'proto/transaction/v1/transaction.proto', 'proto/transaction/v1/events.proto'],
+    resource_deps=['kafka'],
+    labels=['kafka'],
+)
+
 def forward(name, service, port, target, namespace='monitoring', dep='monitoring', label='monitoring'):
     """Forward localhost:<port> (localhost only) to a service in namespace, once dep is up."""
     local_resource(
@@ -139,3 +150,4 @@ def forward(name, service, port, target, namespace='monitoring', dep='monitoring
 forward('grafana', 'monitoring-grafana', 3000, 80)
 forward('prometheus', 'monitoring-prometheus', 9090, 9090)
 forward('jaeger-ui', 'jaeger', 16686, 16686, namespace='jaeger', dep='jaeger', label='tracing')
+forward('kafka-ui-web', 'kafka-ui', 8085, 80, namespace='kafka', dep='kafka-ui', label='kafka')

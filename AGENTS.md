@@ -104,6 +104,7 @@ Current:
 │   ├── cnpg/            # CloudNativePG operator values (Postgres for services)
 │   ├── jaeger/          # Jaeger values (traces, in memory) for the local cluster
 │   ├── kafka/           # the Kafka cluster (KRaft, one node) and its topics, as Strimzi objects
+│   ├── kafka-ui/        # Kafka UI (kafbat) values: browse topics, messages decoded from proto/, consumer groups; read-only
 │   ├── strimzi/         # Strimzi operator values (runs Kafka) for the local cluster
 │   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
@@ -147,6 +148,8 @@ make strimzi                  # install or upgrade the Strimzi operator (runs Ka
 make strimzi-down             # remove the operator (CRDs stay; delete Kafka clusters first)
 make kafka                    # create or update the Kafka cluster and topics in deploy/kafka/ (make dev does this)
 make kafka-down               # delete the Kafka cluster, INCLUDING every message in it
+make kafka-ui                 # install or upgrade Kafka UI in namespace "kafka", with the contracts it decodes (make dev does this)
+make kafka-ui-down            # remove Kafka UI (Kafka and its messages stay)
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
@@ -154,7 +157,7 @@ make load-journals RATE=5 DURATION=1m # with make dev running: post random journ
 make dev-down                 # remove what Tilt deployed, INCLUDING every service database and its data (cluster, monitoring, CloudNativePG stay)
 ```
 
-Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 8082 (ledger), 8083 (transaction), 3000 (Grafana), 9090 (Prometheus) and 16686 (Jaeger) are taken.
+Use `make dev` for everyday work, and `make deploy` for a one-off deploy without Tilt. Don't mix them for the same service: both create the same resources. A new service needs one `go_service(...)` line in the `Tiltfile`, with its own localhost port. Ports 8080 (hello), 8081 (account), 8082 (ledger), 8083 (transaction), 3000 (Grafana), 9090 (Prometheus), 16686 (Jaeger) and 8085 (Kafka UI) are taken.
 
 `make deploy` tags each build `build-<hash of the image's layers>`, so unchanged code means no restart and changed code means a rollout. Never deploy a fixed tag like `:dev`, because Kubernetes can't tell it changed.
 
