@@ -58,6 +58,16 @@ spec:
       # Topics are created as KafkaTopic objects, in git, never by a client
       # writing to a topic name it made up.
       auto.create.topics.enable: false
+      # Disk: the volume is 1 GiB. Kafka writes each partition into segment
+      # files and only ever deletes whole segments, so a partition can hold
+      # up to its retention.bytes plus one segment. The defaults (1 GiB
+      # segments, no size limit) could fill the volume from one partition,
+      # whatever retention.ms says. So segments are 32 MiB, and a topic that
+      # doesn't set its own size limit keeps at most 128 MiB per partition.
+      # Each topic in topics.yaml budgets its own; together they must leave
+      # room for Kafka's internal __consumer_offsets topic.
+      log.segment.bytes: 33554432 # 32 MiB
+      log.retention.bytes: 134217728 # 128 MiB per partition
   entityOperator:
     # The topic operator turns KafkaTopic objects into topics.
     topicOperator:

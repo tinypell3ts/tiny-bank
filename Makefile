@@ -180,6 +180,9 @@ strimzi-down: ## Remove the Strimzi operator (its CRDs stay; delete Kafka cluste
 kafka: ## Create or update the Kafka cluster and topics in deploy/kafka/ (needs make strimzi; make dev does both)
 	kubectl --context $(KUBECTX) apply -f deploy/kafka/
 	kubectl --context $(KUBECTX) -n kafka wait kafka/tiny-bank --for=condition=Ready --timeout=10m
+	@# A topic change Kafka refuses (fewer partitions, say) leaves the cluster
+	@# ready but the topic not, so wait for every topic too.
+	kubectl --context $(KUBECTX) -n kafka wait kafkatopic --all --for=condition=Ready --timeout=2m
 
 kafka-down: ## Delete the Kafka cluster, INCLUDING every message in it (the operator stays)
 	kubectl --context $(KUBECTX) delete -f deploy/kafka/
