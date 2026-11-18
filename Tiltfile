@@ -16,8 +16,11 @@ allow_k8s_contexts(CONTEXT)
 # like a Deployment: it then gets its own resource with its pods and logs.
 k8s_kind('Cluster', api_version='postgresql.cnpg.io/v1')
 
-def go_service(name, port):
-    """Build cmd/<name>, deploy it with the shared chart, and forward localhost:<port>."""
+def go_service(name, port, needs=[]):
+    """Build cmd/<name>, deploy it with the shared chart, and forward localhost:<port>.
+
+    needs lists other resources it waits for, such as 'kafka'.
+    """
     # Tilt tags each build with a content hash and loads it into kind itself,
     # so a code change always rolls out a new pod (like `make deploy`).
     # .dockerignore keeps docs and other non-Go edits from triggering rebuilds.
@@ -39,7 +42,7 @@ def go_service(name, port):
         name,
         objects=['%s:configmap' % name, '%s:servicemonitor' % name],
         port_forwards='%d:8080' % port,
-        resource_deps=['monitoring', 'cnpg'],
+        resource_deps=['monitoring', 'cnpg'] + needs,
         labels=[name],  # each service gets its own group: its app, plus its database if it has one
     )
 
@@ -59,7 +62,7 @@ def go_service(name, port):
 go_service('hello', port=8080)
 go_service('account', port=8081)
 go_service('ledger', port=8082)
-go_service('transaction', port=8083)
+go_service('transaction', port=8083, needs=['kafka'])  # sends its events to Kafka
 
 # --- Monitoring: Prometheus + Grafana (kube-prometheus-stack) ---
 # Installed with plain Helm through `make monitoring`, so it works the same with

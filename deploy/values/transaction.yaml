@@ -10,3 +10,6 @@ config:
   # Where the ledger is: its Service's name, on port 80. Every transfer is
   # posted to it.
   LEDGER_URL: http://ledger
+  # Where Kafka is (make kafka; make dev runs it first): the transaction
+  # service sends its events to it, through its outbox.
+  KAFKA_BROKERS: tiny-bank-kafka-bootstrap.kafka:9092

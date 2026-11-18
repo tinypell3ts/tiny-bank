@@ -7,8 +7,11 @@
 # + segment.bytes). Keep the sum across topics well inside the 1 GiB volume.
 #
 # walkthrough is for trying Kafka out by hand (docs/phases): three partitions,
-# so keys, ordering and consumer groups can be seen. Services' own topics
-# arrive with the outbox.
+# so keys, ordering and consumer groups can be seen.
+#
+# Budget: walkthrough 240 MiB + transaction.transfers 240 MiB = 480 MiB,
+# leaving the rest of the volume for Kafka's own topics (consumer offsets)
+# and room to grow.
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
@@ -22,5 +25,29 @@ spec:
   config:
     retention.ms: 86400000 # a day: it's only for trying things out
     # 3 partitions × (64 + 16) MiB = 240 MiB at most.
+    retention.bytes: 67108864 # 64 MiB per partition
+    segment.bytes: 16777216 # 16 MiB
+---
+# The transaction service's events: a TransferChanged each time a transfer is
+# created, completed or failed (proto/transaction/v1/events.proto), sent
+# through its outbox and keyed by transfer ID, so one transfer's events stay
+# in order. Three partitions, so up to three consumers in a group share them.
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: transaction.transfers
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: tiny-bank
+spec:
+  partitions: 3
+  replicas: 1
+  config:
+    # A week, so a consumer that's down for a few days catches up rather
+    # than missing events. The outbox and the database are the record;
+    # this is how other services hear about it.
+    retention.ms: 604800000
+    # 3 partitions × (64 + 16) MiB = 240 MiB at most. Size wins over time:
+    # a busy week ends early rather than filling the volume.
     retention.bytes: 67108864 # 64 MiB per partition
     segment.bytes: 16777216 # 16 MiB
