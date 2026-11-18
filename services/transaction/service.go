@@ -11,6 +11,12 @@ import (
 
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 )
 
 const (
@@ -131,9 +137,7 @@ func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, erro
 		}
 		for _, t := range due {
 			refresh()
-			if _, err := s.attempt(ctx, t, byFinisher, 1); err != nil {
-				logger.Error("finish transfer", "transfer_id", t.ID, "error", err)
-			}
+			s.finishOne(ctx, logger, t)
 		}
 		tried += len(due)
 		if len(due) < finisherBatch {
@@ -141,6 +145,33 @@ func (s *Service) FinishDue(ctx context.Context, logger *slog.Logger) (int, erro
 		}
 	}
 	return tried, nil
+}
+
+// tracerName is the instrumentation scope of the transaction service's own
+// spans.
+const tracerName = "github.com/tinypell3ts/tiny-bank/services/transaction"
+
+// finishOne makes the finisher's attempt at t, as the root of a trace of its
+// own: the finisher works outside any request, so there's no trace to join.
+// The span ("finish transfer") holds t's ID and, if it has one, the trace ID
+// of the request that created it, so in Jaeger a transfer's attempts can be
+// found by its ID, and lead back to where it started. Its database work and
+// its call to the ledger are spans under it. An error is logged with the
+// attempt's trace ID.
+func (s *Service) finishOne(ctx context.Context, logger *slog.Logger, t Transfer) {
+	attrs := []attribute.KeyValue{attribute.String("transfer.id", t.ID.String())}
+	if t.TraceID != "" {
+		attrs = append(attrs, attribute.String("transfer.created_trace_id", t.TraceID))
+	}
+	ctx, span := otel.Tracer(tracerName).Start(ctx, "finish transfer", trace.WithNewRoot(), trace.WithAttributes(attrs...))
+	defer span.End()
+
+	finished, err := s.attempt(ctx, t, byFinisher, 1)
+	span.SetAttributes(attribute.String("transfer.state", string(finished.State)))
+	if err != nil {
+		span.SetStatus(codes.Error, "")
+		logger.ErrorContext(ctx, "finish transfer", "transfer_id", t.ID, "trace_id", kit.TraceIDFrom(ctx), "error", err)
+	}
 }
 
 // attempt posts pending transfer t, claimed under t.Lease, to the ledger, up

@@ -206,7 +206,9 @@ const (
 // memory, and puts OpenTelemetry's global tracer provider and propagator
 // back when the test ends. Spans are recorded as they end, so a test can
 // read them straight after the request that made them. Tests using it
-// mustn't run in parallel, as the provider is global.
+// mustn't run in parallel, as the provider is global. Look only at the
+// spans in your request's trace: other code using the global provider (such
+// as testcontainers' Docker client) records spans too.
 func RecordSpans(t *testing.T) *tracetest.InMemoryExporter {
 	t.Helper()
 	exporter, restore := recordSpans()

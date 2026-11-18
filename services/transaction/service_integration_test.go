@@ -16,6 +16,9 @@ import (
 	"github.com/monzo/terrors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/tinypell3ts/tiny-bank/pkg/kit/kittest"
 )
 
 // fakeLedger answers posts from a script: each call takes the next answer,
@@ -462,5 +465,54 @@ func TestThePendingGaugesKeepUpDuringASlowDrain(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[1] < seen[0]+1 {
 		t.Errorf("oldest pending seen at each post = %v; want it refreshed between them, about a second older", seen)
+	}
+}
+
+// TestAFinisherAttemptIsATraceOfItsOwn: the finisher works outside any
+// request, so each attempt is the root of its own trace, holding the
+// transfer's ID and the trace it was created in, with its database work
+// under it. Polling for due transfers makes no spans.
+func TestAFinisherAttemptIsATraceOfItsOwn(t *testing.T) {
+	exporter := kittest.RecordSpans(t)
+	s, _ := newTestService(t, nil)
+	req := transferReq("t1", alice, bob, 300)
+	req.TraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	tr, _, err := s.Store.Create(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeDue(t, s.Store, tr.ID)
+	if _, err := s.FinishDue(t.Context(), discard); err != nil {
+		t.Fatal(err)
+	}
+
+	var finish *tracetest.SpanStub
+	var underIt []string
+	spans := exporter.GetSpans()
+	for i, sp := range spans {
+		if sp.Name == "finish transfer" {
+			finish = &spans[i]
+		}
+	}
+	if finish == nil {
+		t.Fatal("no finish transfer span")
+	}
+	for _, sp := range spans {
+		if sp.InstrumentationScope.Name == "github.com/tinypell3ts/tiny-bank/pkg/db" {
+			if sp.SpanContext.TraceID() != finish.SpanContext.TraceID() {
+				t.Errorf("query span %q is outside the attempt's trace: the finisher's polling must make no spans", sp.Name)
+			}
+			underIt = append(underIt, sp.Name)
+		}
+	}
+	got := map[string]string{}
+	for _, kv := range finish.Attributes {
+		got[string(kv.Key)] = kv.Value.String()
+	}
+	if finish.Parent.IsValid() || got["transfer.id"] != tr.ID.String() || got["transfer.created_trace_id"] != req.TraceID || got["transfer.state"] != "completed" {
+		t.Errorf("finish span = parent %v, %v; want a root with the transfer's ID, its creating trace and its state", finish.Parent, got)
+	}
+	if len(underIt) == 0 {
+		t.Error("no database spans under the attempt: its StartAttempt and Complete should show")
 	}
 }
