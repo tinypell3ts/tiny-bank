@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -34,23 +35,37 @@ type queryTracer struct{}
 type spanKey struct{}
 
 func (queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	return startQuerySpan(ctx, operationOf(data.SQL), attribute.String("db.query.text", data.SQL))
+	return startQuerySpan(ctx, summaryOf(data.SQL), attribute.String("db.query.text", data.SQL))
 }
 
 func (queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	endQuerySpan(ctx, data.Err)
 }
 
+// TraceBatchStart starts one span for a batch, named by what's in it
+// ("BATCH INSERT accounts, SELECT accounts FOR UPDATE"), as its queries share
+// one round trip.
 func (queryTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
-	return startQuerySpan(ctx, "BATCH", attribute.Int("db.operation.batch.size", data.Batch.Len()))
+	summaries := make([]string, len(data.Batch.QueuedQueries))
+	for i, q := range data.Batch.QueuedQueries {
+		summaries[i] = summaryOf(q.SQL)
+	}
+	return startQuerySpan(ctx, "BATCH "+strings.Join(summaries, ", "), attribute.Int("db.operation.batch.size", data.Batch.Len()))
 }
 
 // TraceBatchQuery records each query in a batch as an event on the batch's
-// span, with its SQL text: they share one round trip, so they share one span.
+// span, with its SQL text and, if it failed, its error.type, so a failed
+// batch shows which of its queries failed.
 func (queryTracer) TraceBatchQuery(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchQueryData) {
-	if span, ok := ctx.Value(spanKey{}).(trace.Span); ok {
-		span.AddEvent("query", trace.WithAttributes(attribute.String("db.query.text", data.SQL)))
+	span, ok := ctx.Value(spanKey{}).(trace.Span)
+	if !ok {
+		return
 	}
+	attrs := []attribute.KeyValue{attribute.String("db.query.text", data.SQL)}
+	if data.Err != nil {
+		attrs = append(attrs, attribute.String("error.type", errorTypeOf(data.Err)))
+	}
+	span.AddEvent("query", trace.WithAttributes(attrs...))
 }
 
 func (queryTracer) TraceBatchEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchEndData) {
@@ -77,23 +92,67 @@ func endQuerySpan(ctx context.Context, err error) {
 		return
 	}
 	if err != nil {
-		errorType := "_OTHER"
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			errorType = pgErr.Code
-		}
-		span.SetAttributes(attribute.String("error.type", errorType))
+		span.SetAttributes(attribute.String("error.type", errorTypeOf(err)))
 		span.SetStatus(codes.Error, "")
 	}
 	span.End()
 }
 
-// operationOf is a query's first keyword, upper-cased (SELECT, INSERT, BEGIN),
-// as its span's name: short, fixed, and never a value.
-func operationOf(sql string) string {
+// errorTypeOf is a query error's SQLSTATE code, or "_OTHER".
+func errorTypeOf(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return "_OTHER"
+}
+
+// identifier is a plain SQL name: a table, or a function like
+// pg_advisory_xact_lock.
+var identifier = regexp.MustCompile(`^[a-z_][a-z0-9_.]*$`)
+
+// summaryOf names a query for its span: its operation and what it works on,
+// "UPDATE transfers", "SELECT pg_advisory_xact_lock", "SELECT accounts FOR
+// UPDATE", "BEGIN". The target is the table after FROM or INTO (or UPDATE's
+// own), or for a SELECT with no FROM, the function it calls; it's kept only
+// if it's a plain name, so a span name is never a value. Our SQL is fixed
+// text (AGENTS.md), so the names are a small, fixed set.
+func summaryOf(sql string) string {
 	words := strings.Fields(sql)
 	if len(words) == 0 {
 		return "QUERY"
 	}
-	return strings.ToUpper(strings.TrimRight(words[0], ";"))
+	op := strings.ToUpper(strings.TrimRight(words[0], ";"))
+	target := ""
+	switch op {
+	case "UPDATE":
+		if len(words) > 1 {
+			target = words[1]
+		}
+	case "INSERT":
+		target = wordAfter(words, "INTO")
+	case "SELECT", "DELETE":
+		target = wordAfter(words, "FROM")
+		if target == "" && op == "SELECT" && len(words) > 1 {
+			target, _, _ = strings.Cut(words[1], "(") // a function: SELECT pg_advisory_xact_lock(…)
+		}
+	}
+	name := op
+	if target = strings.TrimRight(target, ",;"); identifier.MatchString(target) {
+		name += " " + target
+	}
+	if strings.Contains(strings.ToUpper(sql), "FOR UPDATE") {
+		name += " FOR UPDATE"
+	}
+	return name
+}
+
+// wordAfter is the word following keyword in words (any case), or "".
+func wordAfter(words []string, keyword string) string {
+	for i, w := range words[:len(words)-1] {
+		if strings.EqualFold(w, keyword) {
+			return words[i+1]
+		}
+	}
+	return ""
 }

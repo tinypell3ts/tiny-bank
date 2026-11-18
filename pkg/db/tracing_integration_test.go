@@ -54,6 +54,9 @@ func TestAQueryInARequestGetsASpan(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT $1::int", 4242).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
+	if ended := inTrace(exporter, request); len(ended) != 1 || ended[0].Name != "SELECT" {
+		t.Fatalf("after the query, %d spans had ended, want only the query's: its end must never end the request's span", len(ended))
+	}
 	request.End()
 
 	spans := inTrace(exporter, request)
@@ -106,8 +109,40 @@ func TestABatchIsOneSpan(t *testing.T) {
 	request.End()
 
 	b := inTrace(exporter, request)[0]
-	if b.Name != "BATCH" || attr(b, "db.operation.batch.size") != "2" || len(b.Events) != 2 {
-		t.Errorf("batch span = %q %v with %d events; want BATCH of 2, one event per query", b.Name, b.Attributes, len(b.Events))
+	if b.Name != "BATCH SELECT, SELECT" || attr(b, "db.operation.batch.size") != "2" || len(b.Events) != 2 {
+		t.Errorf("batch span = %q %v with %d events; want BATCH SELECT, SELECT of 2, one event per query", b.Name, b.Attributes, len(b.Events))
+	}
+}
+
+// TestAFailedBatchShowsWhichQueryFailed: the batch's span fails, and the
+// failing query's event carries its SQLSTATE. (A query that can't even be
+// prepared, like one on a missing table, fails the whole batch before any
+// query runs, so then only the batch's span records the error.)
+func TestAFailedBatchShowsWhichQueryFailed(t *testing.T) {
+	exporter := kittest.RecordSpans(t)
+	pool, err := db.Open(t.Context(), dbtest.Database(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	ctx, request := otel.Tracer("test").Start(t.Context(), "request")
+	batch := &pgx.Batch{}
+	batch.Queue("SELECT 1")
+	batch.Queue("SELECT 1 / $1::int", 0) // fails as it runs, like a CHECK constraint refusing a write
+	_ = pool.SendBatch(ctx, batch).Close()
+	request.End()
+
+	b := inTrace(exporter, request)[0]
+	var failed []string
+	for _, e := range b.Events {
+		for _, kv := range e.Attributes {
+			if kv.Key == "error.type" {
+				failed = append(failed, kv.Value.String())
+			}
+		}
+	}
+	if b.Status.Code != codes.Error || len(failed) != 1 || failed[0] != "22012" {
+		t.Errorf("batch = %v, failed events %v; want the batch failed and only the second query's event marked 22012 (division by zero)", b.Status, failed)
 	}
 }
 
