@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"uuid"
 
 	"github.com/jackc/pgx/v5"
@@ -25,8 +26,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// columns is selected by every query, in the order scanAccount reads them.
-// pgx reads Postgres uuid columns straight into uuid.UUID.
+// columns is selected by every query. scanAccount reads them by name, so
+// their order doesn't matter, but each must be a field of accountRow. pgx
+// reads Postgres uuid columns straight into uuid.UUID.
 const columns = "id, customer_id, holder_name, currency, status, created_at"
 
 // Create opens a new account and returns it, with the ID and created time
@@ -37,11 +39,10 @@ func (s *Store) Create(ctx context.Context, req NewRequest) (Account, error) {
 	if err != nil {
 		return Account{}, fmt.Errorf("create account: %w", err)
 	}
-	row := s.pool.QueryRow(ctx,
+	acc, err := s.queryAccount(ctx,
 		"INSERT INTO accounts (customer_id, holder_name, currency) VALUES ($1, $2, $3) RETURNING "+columns,
 		req.CustomerID, req.HolderName, req.Currency.Code(),
 	)
-	acc, err := scanAccount(row)
 	if err != nil {
 		return Account{}, fmt.Errorf("create account: %w", err)
 	}
@@ -52,8 +53,7 @@ func (s *Store) Create(ctx context.Context, req NewRequest) (Account, error) {
 // into a uuid.UUID is the caller's job (the HTTP handler), so a malformed ID
 // never gets this far.
 func (s *Store) Get(ctx context.Context, id uuid.UUID) (Account, error) {
-	row := s.pool.QueryRow(ctx, "SELECT "+columns+" FROM accounts WHERE id = $1", id)
-	acc, err := scanAccount(row)
+	acc, err := s.queryAccount(ctx, "SELECT "+columns+" FROM accounts WHERE id = $1", id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Account{}, errNotFound()
 	}
@@ -63,22 +63,39 @@ func (s *Store) Get(ctx context.Context, id uuid.UUID) (Account, error) {
 	return acc, nil
 }
 
-func scanAccount(row pgx.Row) (Account, error) {
-	var (
-		acc      Account
-		currency string
-		status   string
-	)
-	if err := row.Scan(&acc.ID, &acc.CustomerID, &acc.HolderName, &currency, &status, &acc.CreatedAt); err != nil {
+// accountRow is a row of accounts, read by column name
+// (pgx.RowToStructByName): the order of the columns doesn't matter, and a
+// column with no field here, or a field with no column, is an error rather
+// than a value quietly landing in the wrong field.
+type accountRow struct {
+	ID         uuid.UUID `db:"id"`
+	CustomerID uuid.UUID `db:"customer_id"`
+	HolderName string    `db:"holder_name"`
+	Currency   string    `db:"currency"`
+	Status     string    `db:"status"`
+	CreatedAt  time.Time `db:"created_at"`
+}
+
+// queryAccount runs sql, which must return exactly the columns, and reads its
+// one row into an Account. No row is pgx.ErrNoRows, as with QueryRow.
+func (s *Store) queryAccount(ctx context.Context, sql string, args ...any) (Account, error) {
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
 		return Account{}, err
 	}
-	c, err := money.ParseCurrency(currency)
+	return pgx.CollectOneRow(rows, scanAccount)
+}
+
+func scanAccount(row pgx.CollectableRow) (Account, error) {
+	r, err := pgx.RowToStructByName[accountRow](row)
+	if err != nil {
+		return Account{}, err
+	}
+	c, err := money.ParseCurrency(r.Currency)
 	if err != nil {
 		// The table only allows supported currencies, so this means the table
 		// and pkg/money have drifted apart. Fail loudly rather than guess.
-		return Account{}, fmt.Errorf("stored account %s: %w", acc.ID, err)
+		return Account{}, fmt.Errorf("stored account %s: %w", r.ID, err)
 	}
-	acc.Currency = c
-	acc.Status = Status(status)
-	return acc, nil
+	return Account{ID: r.ID, CustomerID: r.CustomerID, HolderName: r.HolderName, Currency: c, Status: Status(r.Status), CreatedAt: r.CreatedAt}, nil
 }
