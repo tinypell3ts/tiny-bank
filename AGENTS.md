@@ -99,6 +99,7 @@ Current:
 │   ├── charts/service/  # ONE generic Helm chart used by every service
 │   ├── cnpg/            # CloudNativePG operator values (Postgres for services)
 │   ├── jaeger/          # Jaeger values (traces, in memory) for the local cluster
+│   ├── strimzi/         # Strimzi operator values (runs Kafka) for the local cluster
 │   ├── monitoring/      # kube-prometheus-stack values + dashboards/*.json (Grafana) for the local cluster
 │   └── values/          # one values file per service (hello.yaml, …)
 └── docs/
@@ -137,6 +138,8 @@ make cnpg                     # install or upgrade the CloudNativePG operator in
 make cnpg-down                # remove the operator (CRDs and databases stay)
 make jaeger                   # install or upgrade Jaeger (traces) in namespace "jaeger" (make dev does this)
 make jaeger-down              # remove Jaeger and the traces it holds
+make strimzi                  # install or upgrade the Strimzi operator (runs Kafka) in namespace "kafka" (make dev does this)
+make strimzi-down             # remove the operator (CRDs stay; delete Kafka clusters first)
 make dashboards               # reload deploy/monitoring/dashboards/*.json into Grafana (Tilt does this on save)
 make dashboards-check         # validate the dashboard JSON (CI runs this)
 make dev                      # day-to-day: Tilt builds, deploys and port-forwards everything, redeploys on save
