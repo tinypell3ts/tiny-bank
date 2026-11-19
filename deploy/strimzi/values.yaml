@@ -17,6 +17,24 @@
 
 watchNamespaces: []
 
+# No leader election: it lets several replicas share the work, one at a time,
+# but this operator runs one replica, so it protects nothing. And it costs
+# restarts: when the lease can't be renewed in time (the laptop sleeps, or the
+# API server is slow to answer), the operator exits by design, which here
+# meant dozens of restarts a day. A production operator with more than one
+# replica keeps it on.
+leaderElection:
+  enable: false
+
+# Without leader election, two operators running at once would both act on
+# the same Kafka. By default an update starts the new pod before stopping the
+# old one, so stop the old one first instead.
+deploymentStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+
 # Give every pod Strimzi runs (brokers, the topic operator) the Kubernetes
 # "restricted" security settings: non-root, no privilege escalation, all
 # capabilities dropped, the default seccomp profile, as our own pods have.
