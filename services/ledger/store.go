@@ -2,11 +2,13 @@ package ledger
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"uuid"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +16,7 @@ import (
 	"github.com/monzo/terrors"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
+	"github.com/tinypell3ts/tiny-bank/pkg/funding"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
 	"github.com/tinypell3ts/tiny-bank/pkg/money"
 )
@@ -24,6 +27,9 @@ import (
 // from strings, so input can't change what a query does (SQL injection).
 type Store struct {
 	pool *pgxpool.Pool
+	// fundingShards is how many shards each funding account has, read the
+	// first time a post needs it: shard counts only change in a migration.
+	fundingShards sync.Map // uuid.UUID to int16
 }
 
 // NewStore returns a Store using pool. The schema must already be migrated.
@@ -51,11 +57,13 @@ var errAlreadyPosted = errors.New("idempotency key already used")
 // Store in on its own and skip the checks.
 //
 // Two posts that share an account run one after the other: each locks the
-// accounts it touches (SELECT ... FOR UPDATE) until it commits. They lock in
-// account ID order, so two posts can't each hold an account the other needs
-// and wait for ever (a deadlock).
+// account rows it touches (SELECT ... FOR NO KEY UPDATE) until it commits. A
+// split account (the funding accounts) has several rows, and a post locks
+// only the one it picks, so posts to it run side by side. Every post locks
+// in one order (lockAccounts), so two posts can't each hold a row the other
+// needs and wait for ever (a deadlock).
 func (s *Store) postValid(ctx context.Context, req NewJournal) (Journal, bool, error) {
-	return s.decide(ctx, req, func(tx pgx.Tx) (Journal, error) { return insertJournal(ctx, tx, req) })
+	return s.decide(ctx, req, func(tx pgx.Tx) (Journal, error) { return s.insertJournal(ctx, tx, req) })
 }
 
 // refuse records refusal as the answer to req's key, unless the key already
@@ -177,7 +185,7 @@ type querier interface {
 
 // insertJournal claims req's idempotency key, locks and checks its accounts,
 // and writes the journal, inside postValid's transaction.
-func insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, error) {
+func (s *Store) insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, error) {
 	currency := req.Entries[0].Amount.Currency()
 	j := Journal{IdempotencyKey: req.IdempotencyKey, Currency: currency, Entries: req.Entries}
 
@@ -196,16 +204,17 @@ func insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, err
 		return Journal{}, fmt.Errorf("insert journal: %w", err)
 	}
 
-	balances, err := lockAccounts(ctx, tx, req.Entries)
+	slots, err := s.lockAccounts(ctx, tx, req.Entries)
 	if err != nil {
 		return Journal{}, err
 	}
 
-	ids := make([]uuid.UUID, len(req.Entries))
+	var whole, sharded writes
 	amounts := make([]int64, len(req.Entries))
-	after := make([]int64, len(req.Entries))
+	ids := make([]uuid.UUID, len(req.Entries))
+	shards := make([]int16, len(req.Entries))
 	for i, e := range req.Entries {
-		b := balances[i]
+		b := slots[i].Balance
 		if b.Amount.Currency() != e.Amount.Currency() {
 			return Journal{}, errWrongCurrency(e.AccountID, b.Amount.Currency())
 		}
@@ -219,67 +228,200 @@ func insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (Journal, err
 		if b.Kind == KindCustomer && sum.Amount() < 0 {
 			return Journal{}, errInsufficientFunds(e.AccountID)
 		}
-		ids[i], amounts[i], after[i] = e.AccountID, e.Amount.Amount(), sum.Amount()
+		ids[i], amounts[i], shards[i] = e.AccountID, e.Amount.Amount(), slots[i].Shard
+		if slots[i].Shard == 0 {
+			whole.add(e.AccountID, 0, sum.Amount())
+		} else {
+			sharded.add(e.AccountID, slots[i].Shard, sum.Amount())
+		}
 	}
 
-	// Every check passed, so write the new balances and the entries. Both go
+	// Every check passed, so write the new balances and the entries. They go
 	// in one round trip, so the locks are held for as short a time as possible.
 	batch := &pgx.Batch{}
 	batch.Queue(`UPDATE accounts AS a SET balance = v.balance
-		FROM unnest($1::uuid[], $2::bigint[]) AS v (id, balance) WHERE a.id = v.id`, ids, after)
-	batch.Queue(`INSERT INTO entries (journal_id, account_id, amount)
-		SELECT $1, v.id, v.amount FROM unnest($2::uuid[], $3::bigint[]) AS v (id, amount)`, j.ID, ids, amounts)
+		FROM unnest($1::uuid[], $2::bigint[]) AS v (id, balance) WHERE a.id = v.id`, whole.ids, whole.balances)
+	batch.Queue(`UPDATE account_shards AS s SET balance = v.balance
+		FROM unnest($1::uuid[], $2::smallint[], $3::bigint[]) AS v (id, shard, balance)
+		WHERE s.account_id = v.id AND s.shard = v.shard`, sharded.ids, sharded.shards, sharded.balances)
+	batch.Queue(`INSERT INTO entries (journal_id, account_id, shard, amount)
+		SELECT $1, v.id, v.shard, v.amount FROM unnest($2::uuid[], $3::smallint[], $4::bigint[]) AS v (id, shard, amount)`,
+		j.ID, ids, shards, amounts)
 	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return Journal{}, fmt.Errorf("write journal %s: %w", j.ID, err)
 	}
 	return j, nil
 }
 
-// lockAccounts locks the accounts entries touch, creating a customer account
-// for any the ledger hasn't seen, and returns their balances in the same
-// order as entries. Both statements go in one round trip.
-//
-// The rows are created and locked in account ID order (ORDER BY id), so two
-// posts that share accounts always take their locks in the same order and
-// can't deadlock: one waits for the other instead.
-func lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([]Balance, error) {
-	ids := make([]uuid.UUID, len(entries))
-	for i, e := range entries {
-		ids[i] = e.AccountID
+// writes are new balances for one table's rows, as unnest's arrays.
+type writes struct {
+	ids      []uuid.UUID
+	shards   []int16
+	balances []int64
+}
+
+func (w *writes) add(id uuid.UUID, shard int16, balance int64) {
+	w.ids, w.shards, w.balances = append(w.ids, id), append(w.shards, shard), append(w.balances, balance)
+}
+
+// slot is the shard an entry moves, and that shard's balance before it.
+type slot struct {
+	Balance
+	Shard  int16
+	shards int16 // the account's shard count, read with its own row
+}
+
+// fundingShardsOf returns how many shards funding account id has, reading
+// it once and keeping it.
+func (s *Store) fundingShardsOf(ctx context.Context, tx pgx.Tx, id uuid.UUID) (int16, error) {
+	if n, ok := s.fundingShards.Load(id); ok {
+		return n.(int16), nil
 	}
-	batch := &pgx.Batch{}
+	var n int16
+	if err := tx.QueryRow(ctx, `SELECT shards FROM accounts WHERE id = $1`, id).Scan(&n); err != nil {
+		return 0, fmt.Errorf("read shards of funding account %s: %w", id, err)
+	}
+	s.fundingShards.Store(id, n)
+	return n, nil
+}
+
+// lockAccounts locks the shard of each account entries touch, creating a
+// customer account for any the ledger hasn't seen, and returns their
+// balances in the same order as entries.
+//
+// An account with one shard (most) is its row in accounts, as it always
+// was. An account split into shards (the funding accounts) gets a shard
+// picked at random for each post, so posts to it spread over its rows
+// instead of all queueing for one. Only the shard picked is locked: a split
+// account must never need all of them, so only accounts without a balance
+// to check (funding accounts) may be split. A funding account's shard count
+// is read once and kept; a customer account is taken to have one, and if
+// its row says otherwise, the post fails. Creating, locking and reading the
+// rows all go in one round trip.
+//
+// Every post locks in the same order, accounts rows by ID and then
+// account_shards rows by account and shard, so two posts that share rows
+// always take their locks in the same order and can't deadlock: one waits
+// for the other instead.
+func (s *Store) lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([]slot, error) {
+	ids := make([]uuid.UUID, 0, len(entries))
+	shardsOf := map[uuid.UUID]int16{}
+	for _, e := range entries {
+		if !funding.Is(e.AccountID) {
+			ids = append(ids, e.AccountID) // a customer: one shard (checked when it's locked)
+			continue
+		}
+		n, err := s.fundingShardsOf(ctx, tx, e.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		shardsOf[e.AccountID] = n
+	}
+
+	picked := make([]int16, len(entries))
+	var whole, split writes
+	for i, e := range entries {
+		if n := shardsOf[e.AccountID]; n > 1 {
+			picked[i] = randomShard(n)
+		}
+		if picked[i] == 0 {
+			whole.add(e.AccountID, 0, 0)
+		} else {
+			split.add(e.AccountID, picked[i], 0)
+		}
+	}
+
 	// A customer account's row is created by its first journal, in the
 	// journal's currency.
+	batch := &pgx.Batch{}
 	batch.Queue(`INSERT INTO accounts (id, kind, currency)
 		SELECT id, 'customer', $2 FROM unnest($1::uuid[]) AS id ORDER BY id
 		ON CONFLICT (id) DO NOTHING`, ids, entries[0].Amount.Currency().Code())
-	batch.Queue(`SELECT `+accountColumns+` FROM accounts WHERE id = ANY($1) ORDER BY id FOR UPDATE`, ids)
-
+	// FOR NO KEY UPDATE, not FOR UPDATE: it keeps every other post off these
+	// rows just the same, but doesn't block the foreign-key check another
+	// post's entries make against them. With FOR UPDATE, a deposit holding
+	// the funding account's own row and waiting for a customer's would
+	// deadlock with one holding that customer and checking the funding
+	// account for its entries. (It's the lock an UPDATE of balance takes.)
+	batch.Queue(`SELECT `+accountColumns+` FROM accounts WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, whole.ids)
+	batch.Queue(`SELECT s.account_id AS id, a.kind, a.currency, a.shards, s.balance, s.shard
+		FROM account_shards s JOIN accounts a ON a.id = s.account_id
+		WHERE (s.account_id, s.shard) IN (SELECT * FROM unnest($1::uuid[], $2::smallint[]))
+		ORDER BY s.account_id, s.shard FOR NO KEY UPDATE OF s`, split.ids, split.shards)
 	results := tx.SendBatch(ctx, batch)
 	defer func() { _ = results.Close() }() // any error was already returned by Exec or Query
 	if _, err := results.Exec(); err != nil {
 		return nil, fmt.Errorf("create accounts: %w", err)
 	}
-	rows, err := results.Query()
-	if err != nil {
-		return nil, fmt.Errorf("lock accounts: %w", err)
-	}
-	balances, err := pgx.CollectRows(rows, scanBalance)
-	if err != nil {
-		return nil, fmt.Errorf("lock accounts: %w", err)
-	}
-	// entries and the rows are both sorted by account ID, and the insert above
-	// creates any missing row, so row i is entry i's account. Check rather
-	// than trust it, as a mismatch would apply the wrong balance.
-	if len(balances) != len(entries) {
-		return nil, fmt.Errorf("lock accounts: locked %d rows for %d entries", len(balances), len(entries))
-	}
-	for i, b := range balances {
-		if b.AccountID != entries[i].AccountID {
-			return nil, fmt.Errorf("lock accounts: row %d is account %s, want %s", i, b.AccountID, entries[i].AccountID)
+	locked := map[slotKey]slot{}
+	for _, scan := range []pgx.RowToFunc[slot]{scanWholeSlot, scanShardSlot} {
+		rows, err := results.Query()
+		if err != nil {
+			return nil, fmt.Errorf("lock accounts: %w", err)
+		}
+		got, err := pgx.CollectRows(rows, scan)
+		if err != nil {
+			return nil, fmt.Errorf("lock accounts: %w", err)
+		}
+		for _, sl := range got {
+			if sl.shards > 1 && sl.Kind != KindFunding {
+				return nil, fmt.Errorf("account %s is split into %d shards, and only funding accounts may be", sl.AccountID, sl.shards)
+			}
+			locked[slotKey{sl.AccountID, sl.Shard}] = sl
 		}
 	}
-	return balances, nil
+
+	slots := make([]slot, len(entries))
+	for i, e := range entries {
+		sl, ok := locked[slotKey{e.AccountID, picked[i]}]
+		if !ok { // the insert above creates every missing row, so this is a fault
+			return nil, fmt.Errorf("lock accounts: no shard %d of account %s", picked[i], e.AccountID)
+		}
+		slots[i] = sl
+	}
+	return slots, nil
+}
+
+type slotKey struct {
+	id    uuid.UUID
+	shard int16
+}
+
+// shardRow is a row of account_shards with its account's kind and currency,
+// read by column name, as balanceRow is.
+type shardRow struct {
+	balanceRow
+	Shard int16 `db:"shard"`
+}
+
+func scanWholeSlot(row pgx.CollectableRow) (slot, error) {
+	r, err := pgx.RowToStructByName[balanceRow](row)
+	if err != nil {
+		return slot{}, err
+	}
+	b, err := balanceFrom(r)
+	return slot{Balance: b, shards: r.Shards}, err
+}
+
+func scanShardSlot(row pgx.CollectableRow) (slot, error) {
+	r, err := pgx.RowToStructByName[shardRow](row)
+	if err != nil {
+		return slot{}, err
+	}
+	b, err := balanceFrom(r.balanceRow)
+	return slot{Balance: b, Shard: r.Shard}, err
+}
+
+// randomShard picks one of n shards (at most 64) from a random byte. It
+// only spreads load, so the slight bias when n doesn't divide 256 doesn't
+// matter. crypto/rand is as easy as math/rand here, and needs no explaining
+// to a security linter.
+func randomShard(n int16) int16 {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand doesn't fail on any supported platform
+	}
+	return int16(b[0]) % n
 }
 
 // answered returns the answer req's idempotency key already has, if any
@@ -363,7 +505,12 @@ func journal(ctx context.Context, q querier, id uuid.UUID) (Journal, error) {
 // Balance returns how much account id holds, or a terrors not_found if no
 // journal has touched it yet.
 func (s *Store) Balance(ctx context.Context, id uuid.UUID) (Balance, error) {
-	b, err := db.QueryOne(ctx, s.pool, scanBalance, `SELECT `+accountColumns+` FROM accounts WHERE id = $1`, id)
+	// An account's balance is the sum of its shards: its own row (shard 0)
+	// and any in account_shards.
+	b, err := db.QueryOne(ctx, s.pool, scanBalance,
+		`SELECT a.id, a.kind, a.currency, a.shards,
+		        a.balance + coalesce((SELECT sum(s.balance) FROM account_shards s WHERE s.account_id = a.id), 0)::bigint AS balance
+		 FROM accounts a WHERE a.id = $1`, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Balance{}, errAccountNotFound()
 	}
@@ -381,6 +528,7 @@ type balanceRow struct {
 	Kind     string    `db:"kind"`
 	Currency string    `db:"currency"`
 	Amount   int64     `db:"balance"` // in minor units
+	Shards   int16     `db:"shards"`  // 1 unless the account is split
 }
 
 func scanBalance(row pgx.CollectableRow) (Balance, error) {
@@ -388,6 +536,10 @@ func scanBalance(row pgx.CollectableRow) (Balance, error) {
 	if err != nil {
 		return Balance{}, err
 	}
+	return balanceFrom(r)
+}
+
+func balanceFrom(r balanceRow) (Balance, error) {
 	c, err := money.ParseCurrency(r.Currency)
 	if err != nil { // the tables and pkg/money have drifted apart, as in Journal
 		return Balance{}, fmt.Errorf("stored account %s: %w", r.ID, err)
