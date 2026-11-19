@@ -40,17 +40,21 @@ func routes(router *typhon.Router, deps db.Deps) error {
 	if err != nil {
 		return err
 	}
-	producer, err := kafka.NewProducer(brokers) // connects on the first event, not here
-	if err != nil {
-		return err
-	}
-	service := transaction.NewService(transaction.NewStore(deps.Pool), transaction.LedgerService{BaseURL: ledgerURL}, deps.Metrics)
+	service := transaction.NewService(transaction.NewStore(deps.Pool, transaction.AnnounceTransferChanged), transaction.LedgerService{BaseURL: ledgerURL}, deps.Metrics)
 	transaction.RegisterRoutes(router, service)
 	deps.Background(func(ctx context.Context) { service.RunFinisher(ctx, deps.Logger) })
-	relay := outbox.NewRelay(deps.Pool, producer, deps.Logger, deps.Metrics)
+	// The relay uses the service's pool, so while Kafka is down it keeps one
+	// of the pool's connections busy for most of each send's time limit;
+	// requests share the rest. Its producer is made here, inside the job, so
+	// a client exists only while the relay runs, and is closed when it stops.
 	deps.Background(func(ctx context.Context) {
+		producer, err := kafka.NewProducer(brokers) // connects on the first event
+		if err != nil {
+			deps.Logger.ErrorContext(ctx, "outbox relay: no producer, so no events are sent", "error", err)
+			return
+		}
 		defer producer.Close()
-		relay.Run(ctx)
+		outbox.NewRelay(deps.Pool, producer, deps.Logger, deps.Metrics).Run(ctx)
 	})
 	return nil
 }

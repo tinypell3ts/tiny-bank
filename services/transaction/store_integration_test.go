@@ -20,7 +20,7 @@ import (
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	return NewStore(dbtest.Migrated(t, Migrations()))
+	return NewStore(dbtest.Migrated(t, Migrations()), AnnounceTransferChanged)
 }
 
 func hasCode(err error, code string) bool {
@@ -160,7 +160,7 @@ func TestCompleteIsFinal(t *testing.T) {
 
 // announced is what's in the outbox for transfer id: the states of its
 // TransferChanged events, oldest first, and their event IDs.
-func announced(t *testing.T, s *Store, id uuid.UUID) (states []State, eventIDs []string) {
+func announced(t *testing.T, s *Store, id uuid.UUID) (states []transactionv1.TransferState, eventIDs []string) {
 	t.Helper()
 	rows, err := s.pool.Query(t.Context(), `SELECT topic, value FROM outbox WHERE key = $1 ORDER BY id`, []byte(id.String()))
 	if err != nil {
@@ -174,11 +174,7 @@ func announced(t *testing.T, s *Store, id uuid.UUID) (states []State, eventIDs [
 		if err := rows.Scan(&topic, &value); err != nil || proto.Unmarshal(value, &e) != nil || topic != TransfersTopic {
 			t.Fatalf("outbox row: %v, topic %q, want a TransferChanged on %s", err, topic, TransfersTopic)
 		}
-		for state, p := range stateToProto {
-			if p == e.GetTransfer().GetState() {
-				states = append(states, state)
-			}
-		}
+		states = append(states, e.GetTransfer().GetState())
 		eventIDs = append(eventIDs, e.GetEventId())
 	}
 	return states, eventIDs
@@ -207,7 +203,8 @@ func TestOnlyTheCallThatChangesATransferAnnouncesIt(t *testing.T) {
 	}
 
 	states, eventIDs := announced(t, s, tr.ID)
-	if len(states) != 2 || states[0] != StatePending || states[1] != StateCompleted || eventIDs[0] == eventIDs[1] {
+	if len(states) != 2 || states[0] != transactionv1.TransferState_TRANSFER_STATE_PENDING ||
+		states[1] != transactionv1.TransferState_TRANSFER_STATE_COMPLETED || eventIDs[0] == eventIDs[1] {
 		t.Errorf("announced %v (event IDs %v), want pending then completed, with their own IDs", states, eventIDs)
 	}
 
@@ -215,7 +212,7 @@ func TestOnlyTheCallThatChangesATransferAnnouncesIt(t *testing.T) {
 	if _, err := s.Fail(t.Context(), refused.ID, refused.Lease, "precondition_failed.insufficient_funds"); err != nil {
 		t.Fatal(err)
 	}
-	if states, _ := announced(t, s, refused.ID); len(states) != 2 || states[1] != StateFailed {
+	if states, _ := announced(t, s, refused.ID); len(states) != 2 || states[1] != transactionv1.TransferState_TRANSFER_STATE_FAILED {
 		t.Errorf("a refused transfer announced %v, want pending then failed", states)
 	}
 }

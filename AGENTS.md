@@ -135,7 +135,7 @@ make docker-smoke SERVICE=x   # same for cmd/x
 make cluster-up               # create the local kind cluster "tiny-bank" (no-op if it exists)
 make image-load               # build IMAGE and load it into the cluster
 make cluster-down             # delete the cluster
-make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first)
+make deploy                   # build SERVICE (default hello) and helm-install exactly that build (needs make monitoring first; the transaction service also needs make strimzi and make kafka, or its events wait in its outbox)
 make undeploy                 # helm-uninstall SERVICE (deletes its database and data too)
 make chart-check              # helm lint + kubeconform (incl. CRD schemas) for every deploy/values/*.yaml and chart ci/*.yaml, and deploy/kafka/
 make monitoring               # install or upgrade Prometheus + Grafana in namespace "monitoring" (make dev does this)

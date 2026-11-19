@@ -18,12 +18,20 @@ import (
 // service's Postgres database. Every query passes values as parameters, never
 // by building SQL from strings.
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	announce Announce
 }
 
-// NewStore returns a Store using pool. The schema must already be migrated.
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+// Announce saves the news that transfer t has just changed, in tx, the
+// transaction that changed it, so the news goes out if and only if the
+// change is saved. The store calls it for every change that creates or
+// finishes a transfer, and never for a retry or a repeated answer.
+type Announce func(ctx context.Context, tx pgx.Tx, t Transfer) error
+
+// NewStore returns a Store using pool, which announces changes with
+// announce (AnnounceTransferChanged). The schema must already be migrated.
+func NewStore(pool *pgxpool.Pool, announce Announce) *Store {
+	return &Store{pool: pool, announce: announce}
 }
 
 // columns is selected by every query: transferRow's columns, from its db
@@ -39,8 +47,7 @@ var columns = db.Columns[transferRow]()
 //
 // The transfer is saved before anything is sent to the ledger, so a crash
 // right after leaves a pending transfer to finish, not money nobody knows
-// about. A new transfer's TransferChanged event is saved with it; a retry
-// adds none.
+// about. A new transfer is announced in the same transaction; a retry isn't.
 func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, error) {
 	if err := req.Validate(); err != nil {
 		return Transfer{}, false, fmt.Errorf("create transfer: %w", err)
@@ -59,7 +66,7 @@ func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, er
 			req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount(), req.TraceID, req.RequestID); err != nil {
 			return err
 		}
-		return addTransferChanged(ctx, tx, t)
+		return s.announce(ctx, tx, t)
 	})
 	if err == nil {
 		return t, true, nil
@@ -166,9 +173,10 @@ func (s *Store) Pending(ctx context.Context) (int, time.Time, error) {
 }
 
 // Complete marks pending transfer id completed, posted by the ledger as
-// journal journalID, and saves its TransferChanged event with it. Completing it again with the same journal is fine (an
-// answer that arrived twice); anything else on a finished transfer is an
-// error, since a finished transfer never changes.
+// journal journalID, and announces it in the same transaction. Completing it
+// again with the same journal is fine (an answer that arrived twice);
+// anything else on a finished transfer is an error, since a finished
+// transfer never changes.
 func (s *Store) Complete(ctx context.Context, id, journalID uuid.UUID) (Transfer, error) {
 	return s.finish(ctx, id, "complete",
 		`UPDATE transfers SET state = 'completed', journal_id = $2, updated_at = now()
@@ -178,11 +186,10 @@ func (s *Store) Complete(ctx context.Context, id, journalID uuid.UUID) (Transfer
 }
 
 // Fail marks pending transfer id failed, refused by the ledger for reason
-// (its terror code), if the caller still holds lease, and saves its
-// TransferChanged event with it. A refusal only counts
-// from the lease holder: an attempt that lost its lease may have been
-// overtaken by one that moved the money, so its refusal is an errLeaseLost,
-// and the transfer stays as it is. (Complete needs no lease: once the ledger
+// (its terror code), if the caller still holds lease, and announces it in the
+// same transaction. A refusal only counts from the lease holder: an attempt
+// that lost its lease may have been overtaken by one that moved the money,
+// so its refusal is an errLeaseLost, and the transfer stays as it is. (Complete needs no lease: once the ledger
 // has posted the journal, completed is the truth whoever reports it.)
 // Failing it again for the same reason is fine; anything else on a finished
 // transfer is an error.
@@ -194,8 +201,8 @@ func (s *Store) Fail(ctx context.Context, id, lease uuid.UUID, reason string) (T
 		id, reason, lease)
 }
 
-// finish moves a pending transfer to a final state with sql, and saves its
-// TransferChanged event in the same transaction. If it's already finished
+// finish moves a pending transfer to a final state with sql, and announces
+// it in the same transaction. If it's already finished
 // and sameAnswer says it was finished this same way, that's the same answer
 // arriving twice, so it's returned as if this call had done it, and no event
 // is added: only the call that changed it announces it. Finished any other
@@ -211,7 +218,7 @@ func (s *Store) finish(ctx context.Context, id uuid.UUID, what, sql string, same
 		if t, err = db.QueryOne(ctx, tx, scanTransfer, sql, args...); err != nil {
 			return err
 		}
-		return addTransferChanged(ctx, tx, t)
+		return s.announce(ctx, tx, t)
 	})
 	if err != nil {
 		t, err = s.unchanged(ctx, id, what, err)
