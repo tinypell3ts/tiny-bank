@@ -28,12 +28,12 @@ leaderElection:
 
 # Without leader election, two operators running at once would both act on
 # the same Kafka. By default an update starts the new pod before stopping the
-# old one, so stop the old one first instead.
+# old one. Recreate waits until the old pod has gone, shut down and all, before
+# starting the new one. rollingUpdate is null because Kubernetes refuses
+# rolling-update settings on a Recreate Deployment, so none may be sent.
 deploymentStrategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxSurge: 0
-    maxUnavailable: 1
+  type: Recreate
+  rollingUpdate: null
 
 # Give every pod Strimzi runs (brokers, the topic operator) the Kubernetes
 # "restricted" security settings: non-root, no privilege escalation, all
