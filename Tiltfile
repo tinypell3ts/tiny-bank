@@ -141,10 +141,14 @@ local_resource(
 )
 
 def forward(name, service, port, target, namespace='monitoring', dep='monitoring', label='monitoring'):
-    """Forward localhost:<port> (localhost only) to a service in namespace, once dep is up."""
+    """Forward localhost:<port> (localhost only) to a service in namespace, once dep is up.
+
+    kubectl port-forward picks one pod and exits when that pod goes away (a
+    rollout restart, an upgrade), so the loop starts it again a second later.
+    """
     local_resource(
         name,
-        serve_cmd='kubectl --context %s -n %s port-forward svc/%s %d:%d' % (CONTEXT, namespace, service, port, target),
+        serve_cmd='while true; do kubectl --context %s -n %s port-forward svc/%s %d:%d; sleep 1; done' % (CONTEXT, namespace, service, port, target),
         resource_deps=[dep],
         links=[link('http://localhost:%d' % port, name)],
         labels=[label],
