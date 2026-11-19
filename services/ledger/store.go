@@ -28,13 +28,17 @@ import (
 type Store struct {
 	pool *pgxpool.Pool
 	// fundingShards is how many shards each funding account has, read the
-	// first time a post needs it: shard counts only change in a migration.
+	// first time a post needs it: shard counts only change in a migration
+	// (see 00004_shard_accounts.sql for what that means for one).
 	fundingShards sync.Map // uuid.UUID to int16
+	// pickShard picks which of n shards a post moves; randomShard, unless a
+	// test needs to choose.
+	pickShard func(n int16) int16
 }
 
 // NewStore returns a Store using pool. The schema must already be migrated.
 func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+	return &Store{pool: pool, pickShard: randomShard}
 }
 
 // accountColumns is selected by every accounts query: balanceRow's columns,
@@ -255,8 +259,7 @@ func (s *Store) insertJournal(ctx context.Context, tx pgx.Tx, req NewJournal) (J
 
 // writes are new balances for one table's rows, as unnest's arrays.
 type writes struct {
-	ids      []uuid.UUID
-	shards   []int16
+	shardKeys
 	balances []int64
 }
 
@@ -267,8 +270,13 @@ func (w *writes) add(id uuid.UUID, shard int16, balance int64) {
 // slot is the shard an entry moves, and that shard's balance before it.
 type slot struct {
 	Balance
-	Shard  int16
-	shards int16 // the account's shard count, read with its own row
+	Shard int16
+}
+
+// shardKeys are account_shards rows, as unnest's arrays.
+type shardKeys struct {
+	ids    []uuid.UUID
+	shards []int16
 }
 
 // fundingShardsOf returns how many shards funding account id has, reading
@@ -294,10 +302,10 @@ func (s *Store) fundingShardsOf(ctx context.Context, tx pgx.Tx, id uuid.UUID) (i
 // picked at random for each post, so posts to it spread over its rows
 // instead of all queueing for one. Only the shard picked is locked: a split
 // account must never need all of them, so only accounts without a balance
-// to check (funding accounts) may be split. A funding account's shard count
-// is read once and kept; a customer account is taken to have one, and if
-// its row says otherwise, the post fails. Creating, locking and reading the
-// rows all go in one round trip.
+// to check (funding accounts) may be split, which the database enforces
+// (only_funding_accounts_split). A funding account's shard count is read
+// once and kept; a customer account has one. Creating, locking and reading
+// the rows all go in one round trip.
 //
 // Every post locks in the same order, accounts rows by ID and then
 // account_shards rows by account and shard, so two posts that share rows
@@ -319,15 +327,16 @@ func (s *Store) lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([
 	}
 
 	picked := make([]int16, len(entries))
-	var whole, split writes
+	var whole []uuid.UUID // accounts rows to lock
+	var split shardKeys   // account_shards rows to lock
 	for i, e := range entries {
 		if n := shardsOf[e.AccountID]; n > 1 {
-			picked[i] = randomShard(n)
+			picked[i] = s.pickShard(n)
 		}
 		if picked[i] == 0 {
-			whole.add(e.AccountID, 0, 0)
+			whole = append(whole, e.AccountID)
 		} else {
-			split.add(e.AccountID, picked[i], 0)
+			split.ids, split.shards = append(split.ids, e.AccountID), append(split.shards, picked[i])
 		}
 	}
 
@@ -343,10 +352,12 @@ func (s *Store) lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([
 	// the funding account's own row and waiting for a customer's would
 	// deadlock with one holding that customer and checking the funding
 	// account for its entries. (It's the lock an UPDATE of balance takes.)
-	batch.Queue(`SELECT `+accountColumns+` FROM accounts WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, whole.ids)
-	batch.Queue(`SELECT s.account_id AS id, a.kind, a.currency, a.shards, s.balance, s.shard
+	batch.Queue(`SELECT `+accountColumns+` FROM accounts WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, whole)
+	// shardRow's columns, from two tables: db.Columns can't qualify them, so
+	// they're listed here, and RowToStructByName still checks them by name.
+	batch.Queue(`SELECT s.account_id AS id, a.kind, a.currency, s.balance, s.shard
 		FROM account_shards s JOIN accounts a ON a.id = s.account_id
-		WHERE (s.account_id, s.shard) IN (SELECT * FROM unnest($1::uuid[], $2::smallint[]))
+		WHERE (s.account_id, s.shard) IN (SELECT v.id, v.shard FROM unnest($1::uuid[], $2::smallint[]) AS v (id, shard))
 		ORDER BY s.account_id, s.shard FOR NO KEY UPDATE OF s`, split.ids, split.shards)
 	results := tx.SendBatch(ctx, batch)
 	defer func() { _ = results.Close() }() // any error was already returned by Exec or Query
@@ -364,9 +375,6 @@ func (s *Store) lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([
 			return nil, fmt.Errorf("lock accounts: %w", err)
 		}
 		for _, sl := range got {
-			if sl.shards > 1 && sl.Kind != KindFunding {
-				return nil, fmt.Errorf("account %s is split into %d shards, and only funding accounts may be", sl.AccountID, sl.shards)
-			}
 			locked[slotKey{sl.AccountID, sl.Shard}] = sl
 		}
 	}
@@ -375,7 +383,7 @@ func (s *Store) lockAccounts(ctx context.Context, tx pgx.Tx, entries []Entry) ([
 	for i, e := range entries {
 		sl, ok := locked[slotKey{e.AccountID, picked[i]}]
 		if !ok { // the insert above creates every missing row, so this is a fault
-			return nil, fmt.Errorf("lock accounts: no shard %d of account %s", picked[i], e.AccountID)
+			return nil, fmt.Errorf("lock accounts: no shard %d of account %s (were its shards reduced without restarting this pod?)", picked[i], e.AccountID)
 		}
 		slots[i] = sl
 	}
@@ -395,12 +403,8 @@ type shardRow struct {
 }
 
 func scanWholeSlot(row pgx.CollectableRow) (slot, error) {
-	r, err := pgx.RowToStructByName[balanceRow](row)
-	if err != nil {
-		return slot{}, err
-	}
-	b, err := balanceFrom(r)
-	return slot{Balance: b, shards: r.Shards}, err
+	b, err := scanBalance(row)
+	return slot{Balance: b}, err
 }
 
 func scanShardSlot(row pgx.CollectableRow) (slot, error) {
@@ -505,11 +509,13 @@ func journal(ctx context.Context, q querier, id uuid.UUID) (Journal, error) {
 // Balance returns how much account id holds, or a terrors not_found if no
 // journal has touched it yet.
 func (s *Store) Balance(ctx context.Context, id uuid.UUID) (Balance, error) {
-	// An account's balance is the sum of its shards: its own row (shard 0)
-	// and any in account_shards.
-	b, err := db.QueryOne(ctx, s.pool, scanBalance,
-		`SELECT a.id, a.kind, a.currency, a.shards,
-		        a.balance + coalesce((SELECT sum(s.balance) FROM account_shards s WHERE s.account_id = a.id), 0)::bigint AS balance
+	// An account's balance is its own row (shard 0) plus any other shards,
+	// read in one statement, so one snapshot, and added up with money.Add,
+	// which never overflows quietly. The columns are balanceWithShards's,
+	// listed by hand as they come from a subquery.
+	r, err := db.QueryOne(ctx, s.pool, pgx.RowToStructByName[balanceWithShards],
+		`SELECT a.id, a.kind, a.currency, a.balance,
+		        array(SELECT s.balance FROM account_shards s WHERE s.account_id = a.id) AS shard_balances
 		 FROM accounts a WHERE a.id = $1`, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Balance{}, errAccountNotFound()
@@ -517,7 +523,22 @@ func (s *Store) Balance(ctx context.Context, id uuid.UUID) (Balance, error) {
 	if err != nil {
 		return Balance{}, fmt.Errorf("get balance: %w", err)
 	}
+	b, err := balanceFrom(r.balanceRow)
+	if err != nil {
+		return Balance{}, err
+	}
+	for _, minor := range r.ShardBalances {
+		if b.Amount, err = b.Amount.Add(money.New(minor, b.Amount.Currency())); err != nil {
+			return Balance{}, fmt.Errorf("balance of account %s: %w", id, err)
+		}
+	}
 	return b, nil
+}
+
+// balanceWithShards is an account's row and its other shards' balances.
+type balanceWithShards struct {
+	balanceRow
+	ShardBalances []int64 `db:"shard_balances"`
 }
 
 // balanceRow is a row of accounts, read by column name
@@ -528,7 +549,6 @@ type balanceRow struct {
 	Kind     string    `db:"kind"`
 	Currency string    `db:"currency"`
 	Amount   int64     `db:"balance"` // in minor units
-	Shards   int16     `db:"shards"`  // 1 unless the account is split
 }
 
 func scanBalance(row pgx.CollectableRow) (Balance, error) {

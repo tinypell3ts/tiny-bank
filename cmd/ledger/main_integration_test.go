@@ -60,7 +60,7 @@ func TestLedgerAPIEndToEnd(t *testing.T) {
 
 	url := dbtest.Database(t)
 	base, logs := kittest.Start(t, run, map[string]string{"DATABASE_URL": url, "ACCOUNT_URL": accountURL})
-	if !strings.Contains(logs.String(), `"applied":["00001_create_ledger.sql","00002_append_only_journals.sql","00003_record_refusals.sql","00004_shard_accounts.sql"]`) {
+	if !strings.Contains(logs.String(), `"applied":["00001_create_ledger.sql","00002_append_only_journals.sql","00003_record_refusals.sql","00004_shard_accounts.sql","00005_only_funding_accounts_split.sql"]`) {
 		t.Errorf("expected the migration to be logged, got:\n%s", logs)
 	}
 

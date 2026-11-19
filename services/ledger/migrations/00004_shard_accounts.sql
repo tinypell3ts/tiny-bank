@@ -5,8 +5,18 @@
 --
 -- Shard 0 is the account's own row in accounts, as before, and shards 1 to
 -- shards-1 are rows in account_shards. So code that knows nothing of shards
--- (still running while this rolls out) keeps reading and writing shard 0,
--- which stays correct on its own: it never sees, or changes, the others.
+-- (still running while this rolls out) keeps posting to shard 0, and every
+-- shard's balance stays equal to its entries. Two things are off until every
+-- pod runs the new code: an old pod reads a funding account's balance as
+-- shard 0 alone, and an old pod's deposit (FOR UPDATE on the funding row)
+-- and a new pod's (a foreign-key check on it) can deadlock. Postgres aborts
+-- one, and the caller retries it with the same idempotency key, so no money
+-- is lost or moved twice.
+--
+-- The ledger reads a funding account's shard count once and keeps it. Adding
+-- shards is safe while it runs (new ones go unused until a restart);
+-- removing any needs every ledger pod restarted first, or a pod picks a
+-- shard that's gone and its posts fail.
 
 -- How many shards an account has: 1 (only its own row) unless split.
 ALTER TABLE accounts ADD COLUMN shards smallint NOT NULL DEFAULT 1 CHECK (shards BETWEEN 1 AND 64);

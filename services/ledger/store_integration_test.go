@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"uuid"
 
@@ -450,24 +451,39 @@ func TestConcurrentDepositsAndTransfersDontDeadlock(t *testing.T) {
 	wantBalance(t, s, bob, gbp(1000))
 }
 
-// TestASplitCustomerAccountIsRefused: a post locks only the one shard it
+// TestOnlyFundingAccountsCanBeSplit: a post locks only the one shard it
 // picks, so a customer account, whose balance must be checked as a whole,
-// may not be split. If one ever is, posting to it fails rather than check
-// one shard's balance as if it were all of it.
-func TestASplitCustomerAccountIsRefused(t *testing.T) {
+// may not be split. The ledger never splits one, and the database refuses
+// it if anything else tries.
+func TestOnlyFundingAccountsCanBeSplit(t *testing.T) {
 	s := newTestStore(t)
 	fund(t, s, alice, 100)
-	if _, err := s.pool.Exec(t.Context(), `UPDATE accounts SET shards = 2 WHERE id = $1`, alice); err != nil {
-		t.Fatal(err)
+	_, err := s.pool.Exec(t.Context(), `UPDATE accounts SET shards = 2 WHERE id = $1`, alice)
+	if err == nil || !strings.Contains(err.Error(), "only_funding_accounts_split") {
+		t.Errorf("splitting a customer account: err = %v, want only_funding_accounts_split to refuse it", err)
 	}
-	_, _, err := postJournal(s, t.Context(), transfer("t1", alice, bob, 10))
-	if err == nil || !strings.Contains(err.Error(), "only funding accounts may be") {
-		t.Fatalf("posting from a split customer account: err = %v, want it refused", err)
+}
+
+// TestDepositsOnTheFundingRowAndAShardDontDeadlock: a deposit on shard 0
+// locks the funding account's own row and then alice's; one on another
+// shard locks alice's and then, inserting its entries, checks the funding
+// row's key. With FOR UPDATE that check waits for the first, which waits for
+// the second: a deadlock. Picking shard 0 and shard 1 in turn makes the two
+// meet every time, not only by chance.
+func TestDepositsOnTheFundingRowAndAShardDontDeadlock(t *testing.T) {
+	s := newTestStore(t)
+	var turn atomic.Int32
+	s.pickShard = func(int16) int16 { return int16(turn.Add(1) % 2) }
+
+	errs := runConcurrently(40, func(i int) error {
+		_, _, err := postJournal(s, t.Context(), transfer(fmt.Sprintf("d%d", i), gbpFunding(t), alice, 10))
+		return err
+	})
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("want every deposit posted: %v", err)
 	}
-	if _, err := s.pool.Exec(t.Context(), `UPDATE accounts SET shards = 1 WHERE id = $1`, alice); err != nil {
-		t.Fatal(err) // put it back, for checkInvariants
-	}
-	wantBalance(t, s, alice, gbp(100))
+	wantBalance(t, s, alice, gbp(400))
+	wantBalance(t, s, gbpFunding(t), gbp(-400))
 }
 
 // TestConcurrentRetriesPostOnce sends the same request many times at once, as
