@@ -13,6 +13,7 @@ deploy/
 ├── jaeger/values.yaml     # Jaeger settings: receives traces over OTLP, keeps them in memory, shows them
 ├── strimzi/values.yaml    # Strimzi operator settings (runs Kafka, in the kafka namespace)
 ├── kafka/                 # the Kafka cluster (kafka.yaml) and its topics (topics.yaml), as Strimzi objects
+├── kafka-ui/values.yaml   # Kafka UI settings: read-only, decodes messages with the contracts in proto/
 ├── monitoring/values.yaml # kube-prometheus-stack settings for the local cluster
 ├── monitoring/dashboards/ # Grafana dashboards as JSON, loaded by `make dashboards`
 └── values/<service>.yaml # per-service settings, kept as small as possible
@@ -37,6 +38,7 @@ deploy/
 - **Never delete Strimzi's CRDs either.** Deleting the `kafkas.kafka.strimzi.io` CRD deletes every Kafka cluster with it, and the messages in it. `make strimzi-down` removes only the operator; Helm leaves CRDs in place.
 - **Never delete CloudNativePG's CRDs.** Deleting the `clusters.postgresql.cnpg.io` CRD deletes every database with it. The chart keeps its CRDs on `helm uninstall` (`make cnpg-down` only removes the operator), so leave it that way.
 - **`deploy/monitoring/values.yaml` is local-only.** Grafana has no login and everyone is admin. Never reuse it for a shared cluster.
+- **Kafka UI is local-only and read-only.** Anyone who can open it can read every message, so it stays a `ClusterIP` Service, port-forwarded to localhost only (`localhost:8085`), and the cluster is `readOnly` in it: no sending, deleting or changing topics from the UI. It decodes messages with the contracts, which `make kafka-ui` puts in a ConfigMap from `proto/`: a new event's `.proto` goes in that list, its volume mounts and `protobufMessageNameByTopic`. Its chart runs it non-root with no privilege escalation and all capabilities dropped, but its root filesystem isn't read-only (the app writes to it) and it gets a service-account token, with no roles bound.
 - **Jaeger is local-only too, and keeps the pod defaults.** Its UI has no login, so it stays a `ClusterIP` Service, port-forwarded to localhost only (never `--address 0.0.0.0`, whatever the chart's install notes suggest). Its traces live in memory and are lost on restart. `deploy/jaeger/values.yaml` gives it the same hardening as our pods: non-root, a read-only root filesystem, no privilege escalation, all capabilities dropped and no service-account token.
 - **Service APIs are internal until Phase 12.** Services have no authentication yet: the account API lets any caller act for any customer. Keep their Kubernetes Services `ClusterIP` and add no Ingress or `LoadBalancer` until the edge gateway checks who the caller is.
 - **Every service is scraped.** The chart creates a `ServiceMonitor` for each service, so Prometheus scrapes `GET /metrics` on the `http` port without extra setup. That needs the monitoring stack's CRDs, so the monitoring stack is installed first: Tilt waits for it, and `scripts/deploy.sh` stops with "Run: make monitoring" if it's missing.

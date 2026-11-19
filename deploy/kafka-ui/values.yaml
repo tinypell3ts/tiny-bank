@@ -1,0 +1,72 @@
+# Kafka UI (kafbat) settings for the LOCAL kind cluster: a web page for
+# browsing Kafka's topics, their messages, and consumer groups and their lag.
+# Installed by `make kafka-ui` (and by `make dev` through the Tiltfile). The
+# chart version is pinned in the Makefile (KAFKA_UI_CHART_VERSION), and the
+# chart pins the image.
+#
+# Anyone who can open it can read every message on every topic, so it's
+# never exposed: its Service is ClusterIP, and the UI is only port-forwarded
+# to localhost (localhost:8085). It has no sign-in for the same reason
+# Grafana has none locally.
+
+yamlApplicationConfig:
+  kafka:
+    clusters:
+      - name: tiny-bank
+        bootstrapServers: tiny-bank-kafka-bootstrap.kafka:9092
+        # Look, don't touch: no sending, deleting or changing topics from the
+        # UI. Topics change in deploy/kafka/topics.yaml, and messages come
+        # from services.
+        readOnly: true
+        # Our events are binary protobuf. With the contracts (mounted below,
+        # from proto/), the UI shows each message's fields instead of bytes.
+        serde:
+          - name: ProtobufFile
+            properties:
+              protobufFilesDir: /protos
+              protobufMessageNameByTopic:
+                transaction.transfers: transaction.v1.TransferChanged
+  auth:
+    type: disabled
+  # No changing these settings from the UI either.
+  dynamic:
+    config:
+      enabled: false
+
+# The contracts, from the kafka-ui-protos ConfigMap that make kafka-ui builds
+# from proto/. Each file is mounted on its own (subPath), at the path its
+# imports expect: a ConfigMap's keys can't hold a "/", and mounting the whole
+# ConfigMap as a folder adds hidden ..data copies that the UI would read too.
+volumes:
+  - name: protos
+    configMap:
+      name: kafka-ui-protos
+volumeMounts:
+  - name: protos
+    mountPath: /protos/transaction/v1/transaction.proto
+    subPath: transaction.proto
+    readOnly: true
+  - name: protos
+    mountPath: /protos/transaction/v1/events.proto
+    subPath: events.proto
+    readOnly: true
+
+# It's a Java app: enough memory to start, with a limit the kind node can
+# afford.
+resources:
+  requests:
+    cpu: 50m
+    memory: 256Mi
+  limits:
+    memory: 768Mi
+
+# The chart's own defaults already run it as non-root, with no privilege
+# escalation, every capability dropped and seccomp on. Two things are weaker
+# than our own pods: its root filesystem isn't read-only (the app writes to
+# it, kafbat/kafka-ui#78), and the chart can't stop Kubernetes mounting a
+# service account token. The account is its own, with no roles bound, so the
+# token can't do anything.
+podSecurityContext:
+  fsGroup: 2000
+  seccompProfile:
+    type: RuntimeDefault

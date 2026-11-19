@@ -25,6 +25,12 @@ JAEGER_CHART_VERSION := 4.16.1
 STRIMZI_CHART         := oci://quay.io/strimzi-helm/strimzi-kafka-operator
 STRIMZI_CHART_VERSION := 1.3.1
 
+# Kafka UI (kafbat): browse topics, messages (decoded from proto/) and
+# consumer groups. Its chart isn't published as OCI, so it comes from its Helm
+# repository, like Jaeger's.
+KAFKA_UI_CHART_REPO    := https://kafbat.github.io/helm-charts
+KAFKA_UI_CHART_VERSION := 1.6.5
+
 # kubeconform only knows built-in Kubernetes types. Schemas for custom ones
 # (like ServiceMonitor) come from the CRDs catalog, pinned to one commit so a
 # change upstream can't break or loosen our checks.
@@ -35,7 +41,7 @@ CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/89c736bdd
 PROTO_AGAINST ?= main
 
 .PHONY: help fmt fmt-check vet lint test test-integration test-scripts check load-journals hooks proto proto-check docker-build docker-smoke \
-	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down strimzi strimzi-down kafka kafka-down dev dev-down
+	cluster-up cluster-down image-load chart-check deploy undeploy monitoring monitoring-down dashboards dashboards-check cnpg cnpg-down jaeger jaeger-down strimzi strimzi-down kafka kafka-down kafka-ui kafka-ui-down dev dev-down
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -186,6 +192,24 @@ kafka: ## Create or update the Kafka cluster and topics in deploy/kafka/ (needs 
 
 kafka-down: ## Delete the Kafka cluster, INCLUDING every message in it (the operator stays)
 	kubectl --context $(KUBECTX) delete -f deploy/kafka/
+
+# The UI reads our contracts from a ConfigMap, built here from proto/, so a
+# change to an event's .proto shows up on the next make kafka-ui (Tilt runs it
+# on save).
+kafka-ui: ## Install or upgrade Kafka UI (topics, messages, consumer groups) in the "kafka" namespace (needs make kafka; make dev does both)
+	kubectl --context $(KUBECTX) -n kafka create configmap kafka-ui-protos \
+		--from-file=proto/transaction/v1/transaction.proto --from-file=proto/transaction/v1/events.proto \
+		--dry-run=client -o yaml | kubectl --context $(KUBECTX) apply -f -
+	helm upgrade --install kafka-ui kafka-ui --repo $(KAFKA_UI_CHART_REPO) --version $(KAFKA_UI_CHART_VERSION) \
+		--kube-context $(KUBECTX) --namespace kafka \
+		-f deploy/kafka-ui/values.yaml --wait --timeout 5m
+	@# The pod reads the contracts when it starts, so restart it to pick up a change.
+	kubectl --context $(KUBECTX) -n kafka rollout restart deploy/kafka-ui
+	kubectl --context $(KUBECTX) -n kafka rollout status deploy/kafka-ui --timeout 5m
+
+kafka-ui-down: ## Remove Kafka UI (Kafka and its messages stay)
+	helm uninstall kafka-ui --kube-context $(KUBECTX) --namespace kafka
+	kubectl --context $(KUBECTX) -n kafka delete configmap kafka-ui-protos
 
 dev: cluster-up ## Start the Tilt dev loop: build, deploy and redeploy on save (dashboard: localhost:10350)
 	tilt up --context $(KUBECTX)
