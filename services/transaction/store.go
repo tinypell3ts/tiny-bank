@@ -39,7 +39,8 @@ var columns = db.Columns[transferRow]()
 //
 // The transfer is saved before anything is sent to the ledger, so a crash
 // right after leaves a pending transfer to finish, not money nobody knows
-// about.
+// about. A new transfer's TransferChanged event is saved with it; a retry
+// adds none.
 func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, error) {
 	if err := req.Validate(); err != nil {
 		return Transfer{}, false, fmt.Errorf("create transfer: %w", err)
@@ -48,11 +49,18 @@ func (s *Store) Create(ctx context.Context, req NewTransfer) (Transfer, bool, er
 	if req.Kind == KindTransfer {
 		from = &req.From
 	}
-	t, err := s.queryTransfer(ctx,
-		`INSERT INTO transfers (idempotency_key, kind, from_account, to_account, currency, amount, trace_id, request_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''))
-		 ON CONFLICT (idempotency_key) DO NOTHING RETURNING `+columns,
-		req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount(), req.TraceID, req.RequestID)
+	var t Transfer
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		if t, err = db.QueryOne(ctx, tx, scanTransfer,
+			`INSERT INTO transfers (idempotency_key, kind, from_account, to_account, currency, amount, trace_id, request_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''))
+			 ON CONFLICT (idempotency_key) DO NOTHING RETURNING `+columns,
+			req.IdempotencyKey, req.Kind, from, req.To, req.Amount.Currency().Code(), req.Amount.Amount(), req.TraceID, req.RequestID); err != nil {
+			return err
+		}
+		return addTransferChanged(ctx, tx, t)
+	})
 	if err == nil {
 		return t, true, nil
 	}
@@ -158,7 +166,7 @@ func (s *Store) Pending(ctx context.Context) (int, time.Time, error) {
 }
 
 // Complete marks pending transfer id completed, posted by the ledger as
-// journal journalID. Completing it again with the same journal is fine (an
+// journal journalID, and saves its TransferChanged event with it. Completing it again with the same journal is fine (an
 // answer that arrived twice); anything else on a finished transfer is an
 // error, since a finished transfer never changes.
 func (s *Store) Complete(ctx context.Context, id, journalID uuid.UUID) (Transfer, error) {
@@ -170,7 +178,8 @@ func (s *Store) Complete(ctx context.Context, id, journalID uuid.UUID) (Transfer
 }
 
 // Fail marks pending transfer id failed, refused by the ledger for reason
-// (its terror code), if the caller still holds lease. A refusal only counts
+// (its terror code), if the caller still holds lease, and saves its
+// TransferChanged event with it. A refusal only counts
 // from the lease holder: an attempt that lost its lease may have been
 // overtaken by one that moved the money, so its refusal is an errLeaseLost,
 // and the transfer stays as it is. (Complete needs no lease: once the ledger
@@ -185,13 +194,28 @@ func (s *Store) Fail(ctx context.Context, id, lease uuid.UUID, reason string) (T
 		id, reason, lease)
 }
 
-// finish moves a pending transfer to a final state with sql. If it's already
-// finished and sameAnswer says it was finished this same way, that's the same
-// answer arriving twice, so it's returned as if this call had done it.
-// Finished any other way, it's a *finishedError: a bug, since a finished
-// transfer never changes.
+// finish moves a pending transfer to a final state with sql, and saves its
+// TransferChanged event in the same transaction. If it's already finished
+// and sameAnswer says it was finished this same way, that's the same answer
+// arriving twice, so it's returned as if this call had done it, and no event
+// is added: only the call that changed it announces it. Finished any other
+// way, it's a *finishedError: a bug, since a finished transfer never changes.
+//
+// The UPDATE locks the row, so two calls finishing one transfer at once take
+// turns, and the second matches nothing: one transfer's events never come
+// from overlapping transactions, so the relay sends them in order.
 func (s *Store) finish(ctx context.Context, id uuid.UUID, what, sql string, sameAnswer func(Transfer) bool, args ...any) (Transfer, error) {
-	t, err := s.change(ctx, id, what, sql, args...)
+	var t Transfer
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		if t, err = db.QueryOne(ctx, tx, scanTransfer, sql, args...); err != nil {
+			return err
+		}
+		return addTransferChanged(ctx, tx, t)
+	})
+	if err != nil {
+		t, err = s.unchanged(ctx, id, what, err)
+	}
 	var finished *finishedError
 	if errors.As(err, &finished) && sameAnswer(finished.t) {
 		return finished.t, nil
@@ -221,6 +245,13 @@ func (s *Store) change(ctx context.Context, id uuid.UUID, what, sql string, args
 	if err == nil {
 		return t, nil
 	}
+	return s.unchanged(ctx, id, what, err)
+}
+
+// unchanged explains err, from a change to transfer id that failed:
+// pgx.ErrNoRows means it matched nothing, because the transfer is missing,
+// finished or pending under another lease (as change says).
+func (s *Store) unchanged(ctx context.Context, id uuid.UUID, what string, err error) (Transfer, error) {
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Transfer{}, fmt.Errorf("%s transfer %s: %w", what, id, err)
 	}

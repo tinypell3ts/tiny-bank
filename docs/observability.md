@@ -77,6 +77,16 @@ Why metrics work this way, and what is deferred: [ADR-0003](adr/0003-measure-ser
 
   The finisher sets both gauges each second, on every pod, so read them with `max()`. `reason` is one of the ledger's own fixed codes.
 
+  Its outbox, from `pkg/outbox` ([outbox.go](../pkg/outbox/outbox.go)), says whether its events are reaching Kafka:
+
+  | Metric | Type | Labels | Answers |
+  |---|---|---|---|
+  | `outbox_waiting_events` | gauge | none | How many events are saved but not yet sent (counted up to 10,000) |
+  | `outbox_oldest_waiting_seconds` | gauge | none | How long the oldest has waited: over a few seconds means Kafka isn't taking them |
+  | `outbox_sent_events_total` | counter | none | Events sent to Kafka and deleted from the outbox |
+
+  Every pod's relay sets the gauges each second, so read them with `max()` too.
+
 - **Following one request across services:** `kit.Get` and `kit.Post` pass the request ID and the trace on, so the same `request_id` is in the ledger's log lines and in the account service's lines for its checks. Each journal stores the request ID that posted it, so the audit trail leads from a movement of money to the logs of the request that made it.
 
 - **Tracing:** `kit.Main` sets up OpenTelemetry for every service ([tracing.go](../pkg/obs/tracing.go), [ADR-0011](adr/0011-trace-requests-with-opentelemetry-and-jaeger.md)). With `OTEL_EXPORTER_OTLP_ENDPOINT` set (the chart sets `http://jaeger.jaeger:4318`), spans are batched and sent over OTLP/HTTP in the background, and trace context travels between services as the W3C `traceparent` header. Without it, tracing is off. Export failures are logged as warnings and never affect a request.

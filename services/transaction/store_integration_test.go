@@ -12,8 +12,10 @@ import (
 	"uuid"
 
 	"github.com/monzo/terrors"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	transactionv1 "github.com/tinypell3ts/tiny-bank/proto/transaction/v1"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -153,6 +155,68 @@ func TestCompleteIsFinal(t *testing.T) {
 	}
 	if got, _ := s.Get(t.Context(), tr.ID); got.State != StateCompleted || got.JournalID != journal || got.Attempts != 0 {
 		t.Errorf("transfer changed after it was completed: %+v", got)
+	}
+}
+
+// announced is what's in the outbox for transfer id: the states of its
+// TransferChanged events, oldest first, and their event IDs.
+func announced(t *testing.T, s *Store, id uuid.UUID) (states []State, eventIDs []string) {
+	t.Helper()
+	rows, err := s.pool.Query(t.Context(), `SELECT topic, value FROM outbox WHERE key = $1 ORDER BY id`, []byte(id.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var topic string
+		var value []byte
+		var e transactionv1.TransferChanged
+		if err := rows.Scan(&topic, &value); err != nil || proto.Unmarshal(value, &e) != nil || topic != TransfersTopic {
+			t.Fatalf("outbox row: %v, topic %q, want a TransferChanged on %s", err, topic, TransfersTopic)
+		}
+		for state, p := range stateToProto {
+			if p == e.GetTransfer().GetState() {
+				states = append(states, state)
+			}
+		}
+		eventIDs = append(eventIDs, e.GetEventId())
+	}
+	return states, eventIDs
+}
+
+// TestOnlyTheCallThatChangesATransferAnnouncesIt: creating, completing and
+// failing each add one event in the same transaction; a retry, the same
+// answer again, a refused change or an attempt starting add none.
+func TestOnlyTheCallThatChangesATransferAnnouncesIt(t *testing.T) {
+	s := newTestStore(t)
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	if _, _, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartAttempt(t.Context(), tr.ID, tr.Lease, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	journal := uuid.New()
+	for range 2 {
+		if _, err := s.Complete(t.Context(), tr.ID, journal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Fail(t.Context(), tr.ID, tr.Lease, "precondition_failed.insufficient_funds"); err == nil {
+		t.Fatal("Fail on a completed transfer: err = nil, want a finished-transfer error")
+	}
+
+	states, eventIDs := announced(t, s, tr.ID)
+	if len(states) != 2 || states[0] != StatePending || states[1] != StateCompleted || eventIDs[0] == eventIDs[1] {
+		t.Errorf("announced %v (event IDs %v), want pending then completed, with their own IDs", states, eventIDs)
+	}
+
+	refused := mustClaim(t, s, mustCreate(t, s, transferReq("t2", alice, bob, 300)).ID)
+	if _, err := s.Fail(t.Context(), refused.ID, refused.Lease, "precondition_failed.insufficient_funds"); err != nil {
+		t.Fatal(err)
+	}
+	if states, _ := announced(t, s, refused.ID); len(states) != 2 || states[1] != StateFailed {
+		t.Errorf("a refused transfer announced %v, want pending then failed", states)
 	}
 }
 
