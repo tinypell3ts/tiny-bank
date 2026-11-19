@@ -26,9 +26,14 @@ const TransfersTopic = "transaction.transfers"
 // one the finisher finished later (that trace's transfer.created_trace_id
 // leads back to the request).
 func AnnounceTransferChanged(ctx context.Context, tx pgx.Tx, t Transfer) error {
+	transfer := transferToProto(t)
+	// The idempotency key is the caller's own text, so it could hold a name
+	// or anything else they typed: it stays out of events, which every
+	// consumer, and anyone with Kafka UI, can read.
+	transfer.IdempotencyKey = ""
 	return outbox.Add(ctx, tx, TransfersTopic, []byte(t.ID.String()), &transactionv1.TransferChanged{
 		EventId:    uuid.New().String(),
 		OccurredAt: timestamppb.New(t.UpdatedAt),
-		Transfer:   transferToProto(t),
+		Transfer:   transfer,
 	})
 }
