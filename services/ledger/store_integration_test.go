@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"uuid"
 
@@ -44,20 +45,24 @@ func postJournal(s *Store, ctx context.Context, req NewJournal) (Journal, bool, 
 // checkInvariants checks the two rules double-entry bookkeeping promises:
 // every currency's balances add up to zero (money only moves), and every
 // balance equals the sum of its account's entries (the stored balance never
-// drifts from the history).
+// drifts from the history). Both hold shard by shard: an account's own row
+// is shard 0, and account_shards holds the rest.
 func checkInvariants(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background() // t.Context() is already cancelled during cleanup
+	const shards = `SELECT id AS account_id, 0::smallint AS shard, currency, balance FROM accounts
+		UNION ALL SELECT s.account_id, s.shard, a.currency, s.balance FROM account_shards s JOIN accounts a ON a.id = s.account_id`
 	var unbalanced, drifted int
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM (SELECT currency FROM accounts GROUP BY currency HAVING sum(balance) <> 0) c`,
+		`SELECT count(*) FROM (SELECT currency FROM (`+shards+`) b GROUP BY currency HAVING sum(balance) <> 0) c`,
 	).Scan(&unbalanced); err != nil {
 		t.Fatalf("check currencies: %v", err)
 	}
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM accounts a
-		 LEFT JOIN (SELECT account_id, sum(amount) AS total FROM entries GROUP BY account_id) e ON e.account_id = a.id
-		 WHERE a.balance <> coalesce(e.total, 0)`,
+		`SELECT count(*) FROM (`+shards+`) b
+		 LEFT JOIN (SELECT account_id, shard, sum(amount) AS total FROM entries GROUP BY account_id, shard) e
+		   ON e.account_id = b.account_id AND e.shard = b.shard
+		 WHERE b.balance <> coalesce(e.total, 0)`,
 	).Scan(&drifted); err != nil {
 		t.Fatalf("check balances: %v", err)
 	}
@@ -396,6 +401,89 @@ func TestOppositeTransfersDontDeadlock(t *testing.T) {
 	}
 	wantBalance(t, s, alice, gbp(1000))
 	wantBalance(t, s, bob, gbp(1000))
+}
+
+// TestDepositsSpreadOverTheFundingAccountsShards: each deposit takes from
+// one of the GBP funding account's 8 shards, picked at random, so busy
+// deposits don't all queue for one row; its balance is the sum of them.
+func TestDepositsSpreadOverTheFundingAccountsShards(t *testing.T) {
+	s := newTestStore(t)
+	for i := range 80 {
+		if _, _, err := postJournal(s, t.Context(), transfer(fmt.Sprintf("d%d", i), gbpFunding(t), alice, 10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var used int
+	if err := s.pool.QueryRow(t.Context(),
+		`SELECT count(DISTINCT shard) FROM entries WHERE account_id = $1`, gbpFunding(t)).Scan(&used); err != nil {
+		t.Fatal(err)
+	}
+	if used < 4 { // 80 deposits over 8 shards: fewer than 4 is next to impossible
+		t.Errorf("80 deposits used %d of the funding account's 8 shards, want them spread", used)
+	}
+	wantBalance(t, s, gbpFunding(t), gbp(-800))
+	wantBalance(t, s, alice, gbp(800))
+}
+
+// TestConcurrentDepositsAndTransfersDontDeadlock: deposits lock a funding
+// shard in account_shards after the accounts rows they need, and transfers
+// lock only accounts rows, all in one order, so a mix racing each other all
+// post, and every shard still matches its entries (checkInvariants).
+func TestConcurrentDepositsAndTransfersDontDeadlock(t *testing.T) {
+	s := newTestStore(t)
+	fund(t, s, alice, 1000)
+	fund(t, s, bob, 1000)
+
+	errs := runConcurrently(60, func(i int) error {
+		key := fmt.Sprintf("p%d", i)
+		req := map[int]NewJournal{
+			0: transfer(key, gbpFunding(t), alice, 10),
+			1: transfer(key, alice, bob, 10),
+			2: transfer(key, bob, alice, 10),
+		}[i%3]
+		_, _, err := postJournal(s, t.Context(), req)
+		return err
+	})
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("want every post posted: %v", err)
+	}
+	wantBalance(t, s, alice, gbp(1000+20*10))
+	wantBalance(t, s, bob, gbp(1000))
+}
+
+// TestOnlyFundingAccountsCanBeSplit: a post locks only the one shard it
+// picks, so a customer account, whose balance must be checked as a whole,
+// may not be split. The ledger never splits one, and the database refuses
+// it if anything else tries.
+func TestOnlyFundingAccountsCanBeSplit(t *testing.T) {
+	s := newTestStore(t)
+	fund(t, s, alice, 100)
+	_, err := s.pool.Exec(t.Context(), `UPDATE accounts SET shards = 2 WHERE id = $1`, alice)
+	if err == nil || !strings.Contains(err.Error(), "only_funding_accounts_split") {
+		t.Errorf("splitting a customer account: err = %v, want only_funding_accounts_split to refuse it", err)
+	}
+}
+
+// TestDepositsOnTheFundingRowAndAShardDontDeadlock: a deposit on shard 0
+// locks the funding account's own row and then alice's; one on another
+// shard locks alice's and then, inserting its entries, checks the funding
+// row's key. With FOR UPDATE that check waits for the first, which waits for
+// the second: a deadlock. Picking shard 0 and shard 1 in turn makes the two
+// meet every time, not only by chance.
+func TestDepositsOnTheFundingRowAndAShardDontDeadlock(t *testing.T) {
+	s := newTestStore(t)
+	var turn atomic.Int32
+	s.pickShard = func(int16) int16 { return int16(turn.Add(1) % 2) }
+
+	errs := runConcurrently(40, func(i int) error {
+		_, _, err := postJournal(s, t.Context(), transfer(fmt.Sprintf("d%d", i), gbpFunding(t), alice, 10))
+		return err
+	})
+	if err := errors.Join(errs...); err != nil {
+		t.Fatalf("want every deposit posted: %v", err)
+	}
+	wantBalance(t, s, alice, gbp(400))
+	wantBalance(t, s, gbpFunding(t), gbp(-400))
 }
 
 // TestConcurrentRetriesPostOnce sends the same request many times at once, as
