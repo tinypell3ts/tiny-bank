@@ -21,7 +21,8 @@ A bank must be able to answer **"what happened to this customer's money, and why
 | 7 | Request ID passed on to downstream services by `kit.Get`, so one ID follows a request across services, and stored on each journal; ledger business metrics and dashboard ✅ |
 | 8 | Jaeger on the cluster; OpenTelemetry tracing across services, database queries and the transaction finisher; trace and request IDs saved on each transfer ✅ |
 | 9 | Trace context in Kafka headers: a send span per message and a process span around its handler, in the sender's trace ✅ |
-| 10–11 | Outbox backlog and consumer lag metrics |
+| 10 | Outbox backlog metrics (events waiting, the oldest's age, events sent) on the transaction dashboard; events carry the trace of the change that saved them ✅ |
+| 11 | Consumer lag metrics |
 | 13 | Dashboards and alert rules |
 
 ## Current
