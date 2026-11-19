@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,14 @@ func TestValidate(t *testing.T) {
 		"a rate that rounds to a zero interval": func(c *config) { c.rate = 2e9 },
 		"rate not a number":                     func(c *config) { c.rate = math.NaN() },
 		"rate infinite":                         func(c *config) { c.rate = math.Inf(1) },
+		"an unknown hot mode":                   func(c *config) { c.hot = "everything" },
+	}
+	for _, hot := range []string{hotInto, hotDeposits} {
+		c := good
+		c.hot = hot
+		if err := c.validate(); err != nil {
+			t.Errorf("-hot %s: %v", hot, err)
+		}
 	}
 	for name, change := range bad {
 		c := good
@@ -61,6 +70,38 @@ func TestGeneratorMakesValidTransfers(t *testing.T) {
 			t.Fatalf("key %s used twice with retries off", j.IdempotencyKey)
 		}
 		keys[j.IdempotencyKey] = true
+	}
+}
+
+// TestGeneratorHotModes: with -hot, one account is in every journal: the
+// first account receives every transfer, or the funding account pays every
+// deposit; the other side is spread over the accounts.
+func TestGeneratorHotModes(t *testing.T) {
+	accounts := []string{"hot", "b", "c", "d"}
+	for hot, want := range map[string]struct{ from, to func(string) bool }{
+		hotInto: {
+			from: func(a string) bool { return a != "hot" && slices.Contains(accounts, a) },
+			to:   func(a string) bool { return a == "hot" },
+		},
+		hotDeposits: {
+			from: func(a string) bool { return a == gbpFunding },
+			to:   func(a string) bool { return slices.Contains(accounts, a) },
+		},
+	} {
+		g := newGenerator(accounts, 500, 0, "run")
+		g.hot = hot
+		others := map[string]bool{}
+		for range 1000 {
+			j := g.next()
+			from, to := j.Entries[0], j.Entries[1]
+			if !want.from(from.AccountID) || !want.to(to.AccountID) || from.Amount+to.Amount != 0 || to.Amount < 1 {
+				t.Fatalf("-hot %s: journal %+v, want the hot account on its side", hot, j)
+			}
+			others[from.AccountID+to.AccountID] = true
+		}
+		if len(others) < 3 {
+			t.Errorf("-hot %s: only %d different pairs in 1000 journals, want the other side spread", hot, len(others))
+		}
 	}
 }
 

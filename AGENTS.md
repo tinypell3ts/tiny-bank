@@ -79,7 +79,7 @@ Current:
 ├── Tiltfile             # dev loop: build + deploy + port-forward every service, redeploy on save
 ├── .golangci.yml        # linter config (golangci-lint v2)
 ├── .github/             # PR template + CI workflow (workflows/ci.yml)
-├── tools/journalload/   # load generator: posts random journals to the ledger at a set rate (make load-journals)
+├── tools/journalload/   # load generator: posts random journals to the ledger at a set rate (make load-journals); -hot makes one account take part in every journal
 ├── scripts/             # check-branch-name.sh (+ _test.sh), docker-smoke.sh, deploy.sh, hooks/pre-push
 ├── cmd/hello/           # demo service: the smallest service built on pkg/kit
 ├── cmd/account/         # account service binary: its migrations and routes, run by db.Run
