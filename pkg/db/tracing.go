@@ -140,11 +140,16 @@ func summaryOf(sql string) string {
 	if target = strings.TrimRight(target, ",;"); identifier.MatchString(target) {
 		name += " " + target
 	}
-	if strings.Contains(strings.ToUpper(sql), "FOR UPDATE") {
-		name += " FOR UPDATE"
+	// A row lock is named too, as waiting for one is what a long span most
+	// often means: FOR UPDATE, FOR NO KEY UPDATE, FOR SHARE or FOR KEY SHARE.
+	if lock := lockClause.FindStringSubmatch(sql); lock != nil {
+		name += " FOR " + strings.ToUpper(strings.Join(strings.Fields(lock[1]), " "))
 	}
 	return name
 }
+
+// lockClause matches a row-locking clause, any case and spacing.
+var lockClause = regexp.MustCompile(`(?i)\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|KEY\s+SHARE|SHARE)\b`)
 
 // wordAfter is the word following keyword in words (any case), or "".
 func wordAfter(words []string, keyword string) string {
