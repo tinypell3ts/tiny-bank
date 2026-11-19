@@ -65,9 +65,14 @@ func Add(ctx context.Context, tx pgx.Tx, topic string, key []byte, event proto.M
 const (
 	// batchSize is how many events a relay sends per transaction.
 	batchSize = 100
-	// pollInterval is how long a relay waits when there was nothing to send,
-	// another pod was relaying, or sending failed.
+	// pollInterval is how long a relay waits when there was nothing to send
+	// or another pod was relaying.
 	pollInterval = 200 * time.Millisecond
+	// maxBackoff is the longest a relay waits after sending failed: each
+	// failure in a row doubles the wait from pollInterval, up to this, so a
+	// failure that won't go away (a topic that doesn't exist) is logged every
+	// few seconds, not five times a second.
+	maxBackoff = 5 * time.Second
 	// sendTimeout bounds a batch's sends, so a relay whose Kafka is down
 	// gives up and rolls back rather than holding its transaction open.
 	sendTimeout = 10 * time.Second
@@ -101,19 +106,32 @@ func (r *Relay) Run(ctx context.Context) {
 	defer wg.Wait()
 	wg.Go(func() { r.measureEvery(ctx) })
 
+	wait := pollInterval
 	for ctx.Err() == nil {
 		sent, err := r.SendBatch(ctx)
 		if err != nil && ctx.Err() == nil {
-			r.logger.ErrorContext(ctx, "outbox relay", "error", err)
+			r.logger.ErrorContext(ctx, "outbox relay", "error", err, "retry_in", wait.String())
 		}
 		if sent > 0 {
+			wait = pollInterval
 			continue // there may be more waiting
 		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(pollInterval):
+		case <-time.After(wait):
 		}
+		wait = nextWait(wait, err)
 	}
+}
+
+// nextWait is how long to wait after the next batch that sends nothing: back
+// to pollInterval once a batch works, and twice as long (up to maxBackoff)
+// after each one that failed.
+func nextWait(wait time.Duration, err error) time.Duration {
+	if err == nil {
+		return pollInterval
+	}
+	return min(2*wait, maxBackoff)
 }
 
 // row is an event waiting in the outbox.
