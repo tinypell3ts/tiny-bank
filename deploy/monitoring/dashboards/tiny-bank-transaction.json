@@ -1,7 +1,7 @@
 {
   "uid": "tiny-bank-transaction",
   "title": "tiny-bank / Transactions",
-  "description": "Whether transfers get finished: calls to the ledger by outcome and by who tried, and what's still pending, from the transaction service's business metrics (services/transaction/metrics.go).",
+  "description": "Whether transfers get finished: calls to the ledger by outcome and by who tried, and what's still pending, from the transaction service's business metrics (services/transaction/metrics.go); and whether its events reach Kafka, from its outbox (pkg/outbox).",
   "tags": [
     "tiny-bank"
   ],
@@ -317,6 +317,193 @@
           "refId": "A",
           "expr": "max(transaction_pending_transfers)",
           "legendFormat": "pending"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Events waiting to send",
+      "description": "Events the transaction service has saved in its outbox but not yet sent to Kafka. A few for a moment is normal; a number that keeps growing means Kafka isn't taking them. Counted up to 10,000. Every pod reports the same count, so this is the max.",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(outbox_waiting_events{job=\"transaction\"})"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Oldest waiting event",
+      "description": "How long the oldest unsent event has waited. Events normally go within a second; over a few seconds means Kafka is down or refusing them (the relay's log lines say why).",
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(outbox_oldest_waiting_seconds{job=\"transaction\"})"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Events sent per second",
+      "description": "TransferChanged events sent to Kafka: about two per transfer (created, then completed or failed).",
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(outbox_sent_events_total{job=\"transaction\"}[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Outbox over time",
+      "description": "Events waiting, against events sent. While Kafka is down, waiting grows and sent drops to 0; once it's back, waiting drains to 0 and sent jumps as the backlog goes out.",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(outbox_waiting_events{job=\"transaction\"})",
+          "legendFormat": "waiting"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(outbox_sent_events_total{job=\"transaction\"}[1m]))",
+          "legendFormat": "sent per second"
         }
       ]
     }
