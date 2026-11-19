@@ -10,6 +10,14 @@
 // so every outcome on the dashboard gets traffic. It prints a summary at the
 // end.
 //
+// -hot makes one account take part in every journal, to measure how the
+// ledger copes with an account that's always busy (each post locks the
+// accounts it touches, so posts to one account queue behind each other):
+//
+//	-hot into      every transfer goes into the first account, like payments
+//	               to a big merchant (give the senders enough: -fund)
+//	-hot deposits  every journal is a deposit from the GBP funding account
+//
 // It talks to the services the way any caller does, over HTTP and JSON, so
 // it needs them running: `make dev` forwards the account service to
 // localhost:8081 and the ledger to localhost:8082.
@@ -66,6 +74,7 @@ type config struct {
 	maxAmount   int64         // the largest transfer, in pence
 	retryShare  float64       // share of requests that resend an earlier one
 	maxInFlight int           // requests allowed at once; more are skipped
+	hot         string        // "" (spread), hotInto or hotDeposits
 	accountURL  string
 	ledgerURL   string
 }
@@ -79,6 +88,7 @@ func main() {
 	flag.Int64Var(&cfg.maxAmount, "max-amount", 10_000, "the largest transfer, in pence (10000 is £100)")
 	flag.Float64Var(&cfg.retryShare, "retries", 0.1, "share of requests that resend an earlier one, from 0 to 1")
 	flag.IntVar(&cfg.maxInFlight, "max-in-flight", 100, "requests allowed at once; more are counted as skipped")
+	flag.StringVar(&cfg.hot, "hot", "", `make one account take part in every journal: "into" (every transfer into the first account) or "deposits" (every journal a deposit from the funding account)`)
 	flag.StringVar(&cfg.accountURL, "account-url", "http://localhost:8081", "the account service")
 	flag.StringVar(&cfg.ledgerURL, "ledger-url", "http://localhost:8082", "the ledger")
 	flag.Parse()
@@ -122,6 +132,8 @@ func (c config) validate() error {
 		return errors.New("-retries must be from 0 to 1")
 	case c.maxInFlight < 1:
 		return errors.New("-max-in-flight must be at least 1")
+	case c.hot != "" && c.hot != hotInto && c.hot != hotDeposits:
+		return fmt.Errorf("-hot must be %q or %q", hotInto, hotDeposits)
 	}
 	return nil
 }
@@ -140,10 +152,11 @@ func run(ctx context.Context, cfg config, client *http.Client, out io.Writer) er
 		return err
 	}
 
-	if _, err := fmt.Fprintf(out, "Posting %g journals a second for %s (Ctrl-C to stop early)...\n", cfg.rate, cfg.duration); err != nil {
+	if _, err := fmt.Fprintf(out, "Posting %g journals a second for %s%s (Ctrl-C to stop early)...\n", cfg.rate, cfg.duration, hotNote[cfg.hot]); err != nil {
 		return err
 	}
 	gen := newGenerator(accounts, cfg.maxAmount, cfg.retryShare, runID)
+	gen.hot = cfg.hot
 	stats := &stats{}
 	start := time.Now()
 	load(ctx, cfg, func(ctx context.Context) {
@@ -244,11 +257,24 @@ func transfer(key, from, to string, pence int64) journal {
 	return journal{IdempotencyKey: key, Currency: "GBP", Entries: []entry{{from, -pence}, {to, pence}}}
 }
 
+// The -hot modes.
+const (
+	hotInto     = "into"
+	hotDeposits = "deposits"
+)
+
+var hotNote = map[string]string{
+	hotInto:     ", every transfer into the first account",
+	hotDeposits: ", every journal a deposit from the funding account",
+}
+
 // generator makes the journals to post: random transfers between two
-// different accounts, and now and then a retry of one already posted.
+// different accounts (or, with hot, ones that all touch one account), and
+// now and then a retry of one already posted.
 type generator struct {
 	mu         sync.Mutex
 	accounts   []string
+	hot        string // "" (spread), hotInto or hotDeposits
 	maxAmount  int64
 	retryShare float64
 	runID      string
@@ -272,13 +298,20 @@ func (g *generator) next() journal {
 	if g.poolLen > 0 && float64(randN(1_000_000)) < g.retryShare*1_000_000 {
 		return g.pool[randN(g.poolLen)] // the same request again: a retry
 	}
+	g.n++
+	key, pence := fmt.Sprintf("load-%s-%d", g.runID, g.n), 1+int64(randN(int(g.maxAmount)))
+	switch g.hot {
+	case hotInto: // from any other account into the first
+		return transfer(key, g.accounts[1+randN(len(g.accounts)-1)], g.accounts[0], pence)
+	case hotDeposits: // from the funding account into any account
+		return transfer(key, gbpFunding, g.accounts[randN(len(g.accounts))], pence)
+	}
 	from := randN(len(g.accounts))
 	to := randN(len(g.accounts) - 1)
 	if to >= from {
 		to++ // never the same account twice in one journal
 	}
-	g.n++
-	return transfer(fmt.Sprintf("load-%s-%d", g.runID, g.n), g.accounts[from], g.accounts[to], 1+int64(randN(int(g.maxAmount))))
+	return transfer(key, g.accounts[from], g.accounts[to], pence)
 }
 
 // posted adds j, which the ledger has just posted, to the journals retries
