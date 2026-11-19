@@ -69,9 +69,9 @@ const (
 	// or another pod was relaying.
 	pollInterval = 200 * time.Millisecond
 	// maxBackoff is the longest a relay waits after sending failed: each
-	// failure in a row doubles the wait from pollInterval, up to this, so a
-	// failure that won't go away (a topic that doesn't exist) is logged every
-	// few seconds, not five times a second.
+	// failure in a row doubles the wait, up to this, so a failure that won't
+	// go away (a topic that doesn't exist) is logged every few seconds, not
+	// five times a second.
 	maxBackoff = 5 * time.Second
 	// sendTimeout bounds a batch's sends, so a relay whose Kafka is down
 	// gives up and rolls back rather than holding its transaction open.
@@ -106,32 +106,39 @@ func (r *Relay) Run(ctx context.Context) {
 	defer wg.Wait()
 	wg.Go(func() { r.measureEvery(ctx) })
 
-	wait := pollInterval
+	var wait time.Duration
 	for ctx.Err() == nil {
 		sent, err := r.SendBatch(ctx)
+		wait = pause(wait, sent, err)
 		if err != nil && ctx.Err() == nil {
 			r.logger.ErrorContext(ctx, "outbox relay", "error", err, "retry_in", wait.String())
 		}
-		if sent > 0 {
-			wait = pollInterval
-			continue // there may be more waiting
+		if wait == 0 {
+			continue // it sent something, so there may be more waiting
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(wait):
 		}
-		wait = nextWait(wait, err)
 	}
 }
 
-// nextWait is how long to wait after the next batch that sends nothing: back
-// to pollInterval once a batch works, and twice as long (up to maxBackoff)
-// after each one that failed.
-func nextWait(wait time.Duration, err error) time.Duration {
-	if err == nil {
+// pause is how long to wait before the next batch, given the last pause and
+// what this batch did:
+//   - none after sending something (even if some of the batch failed), as
+//     there may be more waiting;
+//   - pollInterval after finding nothing to send, or another pod relaying;
+//   - after a batch that failed and sent nothing, twice the last pause,
+//     from 2 × pollInterval up to maxBackoff.
+func pause(last time.Duration, sent int, err error) time.Duration {
+	switch {
+	case sent > 0:
+		return 0
+	case err == nil:
 		return pollInterval
+	default:
+		return min(max(2*last, 2*pollInterval), maxBackoff)
 	}
-	return min(2*wait, maxBackoff)
 }
 
 // row is an event waiting in the outbox.
