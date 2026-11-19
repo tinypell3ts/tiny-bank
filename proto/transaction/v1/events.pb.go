@@ -46,7 +46,8 @@ type TransferChanged struct {
 	OccurredAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
 	// The transfer as it was just after the change. Its state says what
 	// happened: PENDING (created), COMPLETED (the money moved) or FAILED (no
-	// money moved; failure_reason says why).
+	// money moved; failure_reason says why). Its idempotency_key is always
+	// empty: it's the caller's own text, so it could hold personal details.
 	Transfer      *Transfer `protobuf:"bytes,3,opt,name=transfer,proto3" json:"transfer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

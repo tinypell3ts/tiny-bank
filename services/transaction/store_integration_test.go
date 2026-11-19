@@ -3,6 +3,7 @@
 package transaction
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -11,14 +12,17 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/monzo/terrors"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db/dbtest"
+	transactionv1 "github.com/tinypell3ts/tiny-bank/proto/transaction/v1"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	return NewStore(dbtest.Migrated(t, Migrations()))
+	return NewStore(dbtest.Migrated(t, Migrations()), AnnounceTransferChanged)
 }
 
 func hasCode(err error, code string) bool {
@@ -153,6 +157,118 @@ func TestCompleteIsFinal(t *testing.T) {
 	}
 	if got, _ := s.Get(t.Context(), tr.ID); got.State != StateCompleted || got.JournalID != journal || got.Attempts != 0 {
 		t.Errorf("transfer changed after it was completed: %+v", got)
+	}
+}
+
+// announced is what's in the outbox for transfer id: the states of its
+// TransferChanged events, oldest first, and their event IDs.
+func announced(t *testing.T, s *Store, id uuid.UUID) (states []transactionv1.TransferState, eventIDs []string) {
+	t.Helper()
+	rows, err := s.pool.Query(t.Context(), `SELECT topic, value FROM outbox WHERE key = $1 ORDER BY id`, []byte(id.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var topic string
+		var value []byte
+		var e transactionv1.TransferChanged
+		if err := rows.Scan(&topic, &value); err != nil || proto.Unmarshal(value, &e) != nil || topic != TransfersTopic {
+			t.Fatalf("outbox row: %v, topic %q, want a TransferChanged on %s", err, topic, TransfersTopic)
+		}
+		if key := e.GetTransfer().GetIdempotencyKey(); key != "" {
+			t.Errorf("an event carries the caller's idempotency key %q, want it left out", key)
+		}
+		states = append(states, e.GetTransfer().GetState())
+		eventIDs = append(eventIDs, e.GetEventId())
+	}
+	return states, eventIDs
+}
+
+// TestOnlyTheCallThatChangesATransferAnnouncesIt: creating, completing and
+// failing each add one event in the same transaction; a retry, the same
+// answer again, a refused change or an attempt starting add none.
+func TestOnlyTheCallThatChangesATransferAnnouncesIt(t *testing.T) {
+	s := newTestStore(t)
+	tr := mustClaim(t, s, mustCreate(t, s, transferReq("t1", alice, bob, 300)).ID)
+	if _, _, err := s.Create(t.Context(), transferReq("t1", alice, bob, 300)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartAttempt(t.Context(), tr.ID, tr.Lease, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	journal := uuid.New()
+	for range 2 {
+		if _, err := s.Complete(t.Context(), tr.ID, journal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Fail(t.Context(), tr.ID, tr.Lease, "precondition_failed.insufficient_funds"); err == nil {
+		t.Fatal("Fail on a completed transfer: err = nil, want a finished-transfer error")
+	}
+
+	states, eventIDs := announced(t, s, tr.ID)
+	if len(states) != 2 || states[0] != transactionv1.TransferState_TRANSFER_STATE_PENDING ||
+		states[1] != transactionv1.TransferState_TRANSFER_STATE_COMPLETED || eventIDs[0] == eventIDs[1] {
+		t.Errorf("announced %v (event IDs %v), want pending then completed, with their own IDs", states, eventIDs)
+	}
+
+	refused := mustClaim(t, s, mustCreate(t, s, transferReq("t2", alice, bob, 300)).ID)
+	if _, err := s.Fail(t.Context(), refused.ID, refused.Lease, "precondition_failed.insufficient_funds"); err != nil {
+		t.Fatal(err)
+	}
+	if states, _ := announced(t, s, refused.ID); len(states) != 2 || states[1] != transactionv1.TransferState_TRANSFER_STATE_FAILED {
+		t.Errorf("a refused transfer announced %v, want pending then failed", states)
+	}
+}
+
+// TestAChangeWhoseAnnouncementFailsIsNotSaved: the change and its event are
+// one transaction, so if saving the event fails, the change doesn't happen
+// either; tried again, it happens once, with one event.
+func TestAChangeWhoseAnnouncementFailsIsNotSaved(t *testing.T) {
+	pool := dbtest.Migrated(t, Migrations())
+	failing := NewStore(pool, func(ctx context.Context, tx pgx.Tx, tr Transfer) error {
+		if err := AnnounceTransferChanged(ctx, tx, tr); err != nil { // the event is written...
+			return err
+		}
+		return errors.New("outbox full") // ...then the announcement fails
+	})
+	working := NewStore(pool, AnnounceTransferChanged)
+	countOutbox := func() (n int) {
+		t.Helper()
+		if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM outbox`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	if _, _, err := failing.Create(t.Context(), transferReq("t1", alice, bob, 300)); err == nil {
+		t.Fatal("Create with a failing announcement: err = nil, want an error")
+	}
+	if n := countOutbox(); n != 0 {
+		t.Errorf("%d events after a failed Create, want 0", n)
+	}
+	tr := mustClaim(t, working, mustCreate(t, working, transferReq("t1", alice, bob, 300)).ID)
+
+	journal := uuid.New()
+	if _, err := failing.Complete(t.Context(), tr.ID, journal); err == nil {
+		t.Fatal("Complete with a failing announcement: err = nil, want an error")
+	}
+	if _, err := failing.Fail(t.Context(), tr.ID, tr.Lease, "precondition_failed.insufficient_funds"); err == nil {
+		t.Fatal("Fail with a failing announcement: err = nil, want an error")
+	}
+	if got, _ := working.Get(t.Context(), tr.ID); got.State != StatePending {
+		t.Errorf("after failed announcements the transfer is %s, want still pending", got.State)
+	}
+	if n := countOutbox(); n != 1 {
+		t.Errorf("%d events after failed Complete and Fail, want just the creation's", n)
+	}
+
+	if _, err := working.Complete(t.Context(), tr.ID, journal); err != nil {
+		t.Fatal(err)
+	}
+	if states, _ := announced(t, working, tr.ID); len(states) != 2 || states[1] != transactionv1.TransferState_TRANSFER_STATE_COMPLETED {
+		t.Errorf("announced %v, want pending then completed, once each", states)
 	}
 }
 

@@ -14,7 +14,9 @@ import (
 	"github.com/monzo/typhon"
 
 	"github.com/tinypell3ts/tiny-bank/pkg/db"
+	"github.com/tinypell3ts/tiny-bank/pkg/kafka"
 	"github.com/tinypell3ts/tiny-bank/pkg/kit"
+	"github.com/tinypell3ts/tiny-bank/pkg/outbox"
 	"github.com/tinypell3ts/tiny-bank/services/transaction"
 )
 
@@ -23,18 +25,36 @@ var run = db.Run("transaction", transaction.Migrations(), routes)
 
 func main() { kit.Main("transaction", run) }
 
-// routes is the transaction API, on the service's database, plus the
-// finisher, which runs in the background to finish what requests left
-// pending. LEDGER_URL, required, is where the ledger is (http://ledger on the
-// cluster, set in deploy/values/transaction.yaml): every transfer is posted
-// to it.
+// routes is the transaction API, on the service's database, plus two things
+// in the background: the finisher, which finishes what requests left
+// pending, and the outbox relay, which sends the service's events to Kafka.
+// Both settings are required, and set in deploy/values/transaction.yaml:
+// LEDGER_URL is where the ledger is (http://ledger on the cluster), as every
+// transfer is posted to it, and KAFKA_BROKERS is where Kafka is.
 func routes(router *typhon.Router, deps db.Deps) error {
 	ledgerURL, err := kit.ServiceURL(deps.Getenv, "LEDGER_URL")
 	if err != nil {
 		return err
 	}
-	service := transaction.NewService(transaction.NewStore(deps.Pool), transaction.LedgerService{BaseURL: ledgerURL}, deps.Metrics)
+	brokers, err := kafka.Brokers(deps.Getenv)
+	if err != nil {
+		return err
+	}
+	service := transaction.NewService(transaction.NewStore(deps.Pool, transaction.AnnounceTransferChanged), transaction.LedgerService{BaseURL: ledgerURL}, deps.Metrics)
 	transaction.RegisterRoutes(router, service)
 	deps.Background(func(ctx context.Context) { service.RunFinisher(ctx, deps.Logger) })
+	// The relay uses the service's pool, so while Kafka is down it keeps one
+	// of the pool's connections busy for most of each send's time limit;
+	// requests share the rest. Its producer is made here, inside the job, so
+	// a client exists only while the relay runs, and is closed when it stops.
+	deps.Background(func(ctx context.Context) {
+		producer, err := kafka.NewProducer(brokers) // connects on the first event
+		if err != nil {
+			deps.Logger.ErrorContext(ctx, "outbox relay: no producer, so no events are sent", "error", err)
+			return
+		}
+		defer producer.Close()
+		outbox.NewRelay(deps.Pool, producer, deps.Logger, deps.Metrics).Run(ctx)
+	})
 	return nil
 }
